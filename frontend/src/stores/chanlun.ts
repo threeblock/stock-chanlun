@@ -52,6 +52,10 @@ export const useChanlunStore = defineStore('chanlun', () => {
   const currentLevel = ref<LevelOption>('daily')
   const aiModel = ref<string>('deepseek')
   const indicators = ref<IndicatorConfig>({ ...defaultIndicators })
+  // 数据时间戳
+  const klineUpdatedAt = ref<string | null>(null)
+  const chanlunUpdatedAt = ref<string | null>(null)
+  const aiUpdatedAt = ref<string | null>(null)
 
   async function fetchKline(code: string, level: LevelOption = 'daily') {
     loadingKline.value = true
@@ -59,6 +63,7 @@ export const useChanlunStore = defineStore('chanlun', () => {
     try {
       const res = await stockApi.kline(code, level)
       klines.value = res.data.klines || []
+      klineUpdatedAt.value = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
     } catch (e: any) {
       errorKline.value = e.message
     } finally {
@@ -72,6 +77,7 @@ export const useChanlunStore = defineStore('chanlun', () => {
     try {
       const res = await stockApi.chanlun(code, level)
       chanlunResult.value = res.data
+      chanlunUpdatedAt.value = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
     } catch (e: any) {
       errorChanlun.value = e.message
     } finally {
@@ -85,6 +91,7 @@ export const useChanlunStore = defineStore('chanlun', () => {
     try {
       const res = await stockApi.aiSignal(code, level, aiModel.value)
       aiSignal.value = res.data
+      aiUpdatedAt.value = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
     } catch (e: any) {
       errorAI.value = e.message
     } finally {

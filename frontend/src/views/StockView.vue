@@ -123,7 +123,7 @@
         </div>
 
         <!-- Signals -->
-        <SignalCard :signals="store.chanlunResult?.signals || []" />
+        <SignalCard :signals="store.chanlunResult?.signals || []" :updated-at="store.chanlunUpdatedAt" />
       </aside>
 
       <!-- Center: Chart -->
@@ -141,6 +141,7 @@
           <div class="chart-actions">
             <IndicatorSelector />
           </div>
+          <span v-if="store.klineUpdatedAt" class="chart-timestamp">K线 {{ store.klineUpdatedAt }}</span>
         </div>
 
         <!-- 主图区域上方：基本资料（与左侧行情互补） -->
@@ -261,7 +262,7 @@
       <!-- Right: AI Strategy + Notes -->
       <aside class="sidebar-right">
         <CommentSection :stock-code="stockCode" />
-        <StrategyCard :signal="store.aiSignal" />
+        <StrategyCard :signal="store.aiSignal" :updated-at="store.aiUpdatedAt" />
       </aside>
     </div>
   </div>
@@ -811,6 +812,7 @@ watch(() => route.params.code, loadData)
 .chart-header { display: flex; align-items: center; gap: 8px; }
 .chart-level-tabs { flex-shrink: 0; }
 .chart-actions { margin-left: auto; }
+.chart-timestamp { font-size: 0.65rem; color: var(--text-muted); font-family: var(--font-mono); white-space: nowrap; }
 .sub-chart { height: 100px; }
 
 .company-info {

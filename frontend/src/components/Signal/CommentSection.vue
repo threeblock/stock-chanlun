@@ -49,6 +49,7 @@
           :key="c.id"
           class="comment-item"
           :class="{ 'comment-item--editing': editingId === c.id }"
+          :data-comment-id="c.id"
         >
           <!-- 卡片视图（不在编辑状态时显示） -->
           <template v-if="editingId !== c.id">
@@ -128,7 +129,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import { useCommentStore } from '../../stores/comment'
 import type { Comment } from '../../api/stock'
 
@@ -166,7 +167,14 @@ async function submit() {
       await store.addComment(props.stockCode, content)
       showSuccess('笔记发布成功')
     }
+    const prevId = editingId.value
     cancelEdit()
+    if (prevId) {
+      nextTick(() => {
+        const el = document.querySelector(`[data-comment-id="${prevId}"]`)
+        el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      })
+    }
   } finally {
     submitting.value = false
   }

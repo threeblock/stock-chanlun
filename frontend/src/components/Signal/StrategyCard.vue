@@ -2,7 +2,10 @@
   <div class="card strategy-card">
     <div class="card-header">
       <span class="card-title">AI 策略建议</span>
-      <span v-if="signal" class="risk-badge" :class="riskClass">{{ signal.risk_level }}风险</span>
+      <div class="header-right">
+        <span v-if="updatedAt" class="card-time">{{ updatedAt }}</span>
+        <span v-if="signal" class="risk-badge" :class="riskClass">{{ signal.risk_level }}风险</span>
+      </div>
     </div>
 
     <div v-if="!signal" class="empty-strategy">
@@ -38,11 +41,11 @@
         </div>
         <div class="level-row">
           <span class="level-label">止盈价</span>
-          <span class="level-value mono price-down">{{ signal.stop_loss?.toFixed(2) || '—' }}</span>
+          <span class="level-value mono price-up">{{ signal.take_profit?.toFixed(2) || '—' }}</span>
         </div>
         <div class="level-row">
           <span class="level-label">止损价</span>
-          <span class="level-value mono price-up">{{ signal.take_profit?.toFixed(2) || '—' }}</span>
+          <span class="level-value mono price-down">{{ signal.stop_loss?.toFixed(2) || '—' }}</span>
         </div>
       </div>
 
@@ -80,7 +83,7 @@
 import { computed } from 'vue'
 import type { AISignal } from '../../api/stock'
 
-const props = defineProps<{ signal: AISignal | null }>()
+const props = defineProps<{ signal: AISignal | null; updatedAt?: string | null }>()
 
 const dirClass = computed(() => {
   if (!props.signal) return ''
@@ -112,6 +115,9 @@ function confColor(c: number) {
 
 <style scoped>
 .strategy-card { padding: 14px; }
+.card-header { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.header-right { display: flex; align-items: center; gap: 6px; }
+.card-time { font-size: 0.65rem; color: var(--text-muted); font-family: var(--font-mono); }
 
 .risk-badge {
   font-size: 0.7rem;

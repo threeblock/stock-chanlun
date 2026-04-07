@@ -10,12 +10,28 @@
           <router-link to="/watchlist" class="nav-link">自选股</router-link>
         </div>
         <div class="search-box">
-          <input
-            v-model="keyword"
-            @keydown.enter="search"
-            placeholder="输入股票代码或名称..."
-            class="search-input"
-          />
+          <div class="search-wrap">
+            <input
+              v-model="keyword"
+              @keydown.enter="search"
+              @focus="showHistory = true"
+              @blur="setTimeout(() => showHistory = false, 150)"
+              placeholder="输入股票代码或名称..."
+              class="search-input"
+            />
+            <div v-if="showHistory && searchHistory.length > 0 && !results.length" class="search-history">
+              <div class="history-head">
+                <span>最近搜索</span>
+                <button class="clear-btn" @click.stop="clearHistory">清除</button>
+              </div>
+              <div
+                v-for="h in searchHistory"
+                :key="h"
+                class="history-item"
+                @mousedown.prevent="selectHistory(h)"
+              >{{ h }}</div>
+            </div>
+          </div>
           <button class="btn btn-primary" @click="search">搜索</button>
         </div>
       </div>
@@ -300,6 +316,44 @@ const keyword = ref('')
 const results = ref<{ code: string; name: string }[]>([])
 const searching = ref(false)
 const searchError = ref('')
+const searchHistory = ref<string[]>(JSON.parse(localStorage.getItem('search_history') || '[]'))
+const showHistory = ref(false)
+
+function saveHistory(q: string) {
+  const q2 = q.trim()
+  if (!q2) return
+  const h = searchHistory.value.filter(x => x !== q2)
+  h.unshift(q2)
+  searchHistory.value = h.slice(0, 10)
+  localStorage.setItem('search_history', JSON.stringify(searchHistory.value))
+}
+
+function clearHistory() {
+  searchHistory.value = []
+  localStorage.removeItem('search_history')
+}
+
+async function search() {
+  if (!keyword.value.trim()) return
+  saveHistory(keyword.value.trim())
+  searching.value = true
+  searchError.value = ''
+  showHistory.value = false
+  try {
+    const res = await stockApi.search(keyword.value)
+    results.value = res.data.stocks ?? []
+  } catch (e: any) { searchError.value = e.message }
+  finally { searching.value = false }
+}
+
+function selectHistory(q: string) {
+  keyword.value = q
+  search()
+}
+
+function goToStock(code: string) {
+  router.push(`/stock/${code}`)
+}
 
 // ── 大盘数据 ──
 const emptyOverview = (): MarketOverview => ({
@@ -392,21 +446,6 @@ async function fetchNews() {
 onMounted(async () => {
   await Promise.allSettled([fetchHot(), fetchMarket(), fetchNews()])
 })
-
-async function search() {
-  if (!keyword.value.trim()) return
-  searching.value = true
-  searchError.value = ''
-  try {
-    const res = await stockApi.search(keyword.value)
-    results.value = res.data.stocks ?? []
-  } catch (e: any) { searchError.value = e.message }
-  finally { searching.value = false }
-}
-
-function goToStock(code: string) {
-  router.push(`/stock/${code}`)
-}
 </script>
 
 <style scoped>
@@ -428,7 +467,9 @@ function goToStock(code: string) {
   gap: 8px;
   max-width: 380px;
   flex: 1;
+  position: relative;
 }
+.search-wrap { position: relative; flex: 1; }
 .search-input {
   flex: 1;
   background: var(--bg-card);
@@ -438,8 +479,49 @@ function goToStock(code: string) {
   color: var(--text-primary);
   font-size: 0.875rem;
   outline: none;
+  width: 100%;
 }
 .search-input:focus { border-color: var(--accent-blue); }
+
+.search-history {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  z-index: 100;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+}
+.history-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px 4px;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.clear-btn {
+  background: none;
+  border: none;
+  color: var(--accent-blue);
+  font-size: 0.7rem;
+  cursor: pointer;
+  padding: 0;
+}
+.history-item {
+  padding: 8px 12px;
+  font-size: 0.82rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.history-item:hover { background: var(--bg-hover); }
 
 /* ── 容器 ── */
 .container {

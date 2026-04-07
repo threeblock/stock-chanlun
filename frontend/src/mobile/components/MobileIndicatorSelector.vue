@@ -234,8 +234,14 @@ function hideAll() {
   font-size: 0.82rem;
   font-weight: 600;
   cursor: pointer;
-  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  transition: border-color 0.15s, color 0.15s, background 0.15s, transform 0.1s;
   min-height: 36px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ind-chip:active {
+  transform: scale(0.94);
+  opacity: 0.8;
 }
 
 .ind-chip.active {

@@ -22,6 +22,20 @@
       </div>
     </div>
 
+    <!-- 搜索历史 -->
+    <div v-if="showHistory && history.length > 0 && !results.length && !searched" class="search-history">
+      <div class="history-head">
+        <span>最近搜索</span>
+        <button class="clear-btn" @click="clearHistory">清除</button>
+      </div>
+      <div
+        v-for="h in history"
+        :key="h"
+        class="history-item"
+        @click="selectHistory(h)"
+      >{{ h }}</div>
+    </div>
+
     <!-- 搜索结果下拉 -->
     <div v-if="results.length > 0" class="search-results">
       <button
@@ -58,9 +72,12 @@ const keyword = ref('')
 const results = ref<{ code: string; name: string }[]>([])
 const searched = ref(false)
 const searching = ref(false)
+const history = ref<string[]>(JSON.parse(localStorage.getItem('m_search_history') || '[]'))
+const showHistory = ref(false)
 
 async function doSearch() {
   if (!keyword.value.trim()) return
+  saveHistory(keyword.value.trim())
   searching.value = true
   searched.value = false
   results.value = []
@@ -76,10 +93,31 @@ async function doSearch() {
 }
 
 function select(code: string) {
+  saveHistory(code)
   results.value = []
   keyword.value = ''
   searched.value = false
   emit('search', code)
+}
+
+function saveHistory(q: string) {
+  const q2 = q.trim()
+  if (!q2) return
+  const h = history.value.filter(x => x !== q2)
+  h.unshift(q2)
+  history.value = h.slice(0, 10)
+  localStorage.setItem('m_search_history', JSON.stringify(history.value))
+}
+
+function clearHistory() {
+  history.value = []
+  localStorage.removeItem('m_search_history')
+}
+
+function selectHistory(q: string) {
+  keyword.value = q
+  showHistory.value = false
+  doSearch()
 }
 </script>
 
@@ -226,6 +264,51 @@ function select(code: string) {
   border-top: none;
   border-radius: 0 0 12px 12px;
 }
+
+.search-history {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-top: none;
+  border-radius: 0 0 12px 12px;
+  z-index: 99;
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+.history-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 14px 4px;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.clear-btn {
+  background: none;
+  border: none;
+  color: var(--accent-blue);
+  font-size: 0.68rem;
+  cursor: pointer;
+  padding: 0;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.history-item {
+  padding: 10px 14px;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.12s;
+  border-bottom: 1px solid var(--divider);
+}
+.history-item:last-child { border-bottom: none; }
+.history-item:active { background: var(--bg-hover); }
 
 .search-loading {
   padding: 14px 16px;

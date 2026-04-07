@@ -127,9 +127,17 @@
           <button v-if="results.length > 0" class="btn btn-ghost btn-sm" @click="clearResults">清除结果</button>
         </div>
 
-        <!-- 加载骨架屏 -->
+        <!-- 加载骨架屏 + 进度 -->
         <div v-if="loading" class="skeleton-list">
           <div v-for="i in 8" :key="i" class="skeleton-row" />
+          <div class="progress-wrap">
+            <div class="progress-bar">
+              <div class="progress-fill" :style="{ width: progressPct + '%' }" />
+            </div>
+            <span class="progress-text">
+              正在分析 {{ progress.done }} / {{ progress.total }} 只股票...
+            </span>
+          </div>
         </div>
 
         <!-- 空状态 -->
@@ -212,7 +220,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { reactive, ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { stockApi, type StockScreenResult } from '../api/stock'
 
@@ -224,6 +232,10 @@ const selectedSignals = ref<string[]>([])
 const progress = ref({ done: 0, total: 0 })
 const PAGE_SIZE = 20
 const displayLimit = ref(PAGE_SIZE)
+const progressPct = computed(() => {
+  if (!progress.value.total) return 0
+  return Math.round(progress.value.done / progress.value.total * 100)
+})
 
 const params = reactive({
   change_pct_min: null as number | null,
@@ -532,6 +544,35 @@ function trendClass(trend: string): string {
   background-size: 200% 100%;
 }
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+.progress-wrap {
+  margin-top: 12px;
+  padding: 12px 16px;
+  background: var(--bg-card);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.progress-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--bg-primary);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-blue), #38bdf8);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+.progress-text {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
 
 /* Empty state */
 .empty-state {

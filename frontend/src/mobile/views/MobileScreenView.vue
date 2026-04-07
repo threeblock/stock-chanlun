@@ -92,8 +92,14 @@
     </div>
 
     <div v-if="screening" class="results-loading">
+      <div class="progress-wrap">
+        <div class="progress-bar">
+          <div class="progress-fill" :style="{ width: progressPct + '%' }" />
+        </div>
+        <span class="progress-text">{{ progressDone }} / {{ progressTotal }} 只</span>
+      </div>
       <div class="spinner" />
-      <span>筛选中，请稍候...</span>
+      <span>筛选分析中...</span>
     </div>
 
     <div v-else-if="screenError" class="results-error">
@@ -107,7 +113,7 @@
       </div>
       <div class="results-list">
         <button
-          v-for="s in results"
+          v-for="s in results.slice(0, displayLimit)"
           :key="s.code"
           class="result-row"
           @click="go(`/m/stock/${s.code}`)"
@@ -134,12 +140,15 @@
           </div>
         </button>
       </div>
+      <button v-if="results.length > displayLimit" class="load-more-btn" @click="displayLimit += PAGE_SIZE">
+        加载更多（{{ results.length - displayLimit }} 条）
+      </button>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
+import { ref, reactive, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { stockApi, type StockScreenResult } from '@/api/stock'
 
@@ -168,6 +177,14 @@ const results = ref<StockScreenResult[]>([])
 const total = ref(0)
 const screening = ref(false)
 const screenError = ref('')
+const progressDone = ref(0)
+const progressTotal = ref(0)
+const PAGE_SIZE = 20
+const displayLimit = ref(PAGE_SIZE)
+const progressPct = computed(() => {
+  if (!progressTotal.value) return 0
+  return Math.round(progressDone.value / progressTotal.value * 100)
+})
 
 function resetFilters() {
   filters.change_pct_min = undefined
@@ -184,18 +201,60 @@ function resetFilters() {
 async function doScreen() {
   screening.value = true
   screenError.value = ''
+  results.value = []
+  displayLimit.value = PAGE_SIZE
+  progressDone.value = 0
+  progressTotal.value = 0
+  const params: Parameters<typeof stockApi.screenStocks>[0] = {}
+  if (filters.change_pct_min != null) params.change_pct_min = filters.change_pct_min
+  if (filters.change_pct_max != null) params.change_pct_max = filters.change_pct_max
+  if (filters.volume_min != null) params.volume_min = filters.volume_min
+  if (filters.volume_max != null) params.volume_max = filters.volume_max
+  if (filters.pe_max != null) params.pe_max = filters.pe_max
+  if (filters.pb_max != null) params.pb_max = filters.pb_max
+  if (filters.signals) params.signals = filters.signals
   try {
-    const params: Parameters<typeof stockApi.screenStocks>[0] = {}
-    if (filters.change_pct_min != null) params.change_pct_min = filters.change_pct_min
-    if (filters.change_pct_max != null) params.change_pct_max = filters.change_pct_max
-    if (filters.volume_min != null) params.volume_min = filters.volume_min
-    if (filters.volume_max != null) params.volume_max = filters.volume_max
-    if (filters.pe_max != null) params.pe_max = filters.pe_max
-    if (filters.pb_max != null) params.pb_max = filters.pb_max
-    if (filters.signals) params.signals = filters.signals
-    const res = await stockApi.screenStocks(params)
-    results.value = res.data.results ?? []
-    total.value = res.data.total ?? results.value.length
+    const p = { ...params, level: 'daily', pool_size: 100 }
+    const qs = new URLSearchParams()
+    qs.set('level', 'daily')
+    qs.set('pool_size', '100')
+    qs.set('max_results', '50')
+    if (p.change_pct_min != null) qs.set('change_pct_min', String(p.change_pct_min))
+    if (p.change_pct_max != null) qs.set('change_pct_max', String(p.change_pct_max))
+    if (p.volume_min != null) qs.set('volume_min', String(p.volume_min))
+    if (p.volume_max != null) qs.set('volume_max', String(p.volume_max))
+    if (p.pe_max != null) qs.set('pe_max', String(p.pe_max))
+    if (p.pb_max != null) qs.set('pb_max', String(p.pb_max))
+    if (p.signals) qs.set('signals', p.signals)
+    const resp = await fetch(`/api/stocks/screen-stream?${qs.toString()}`)
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    const reader = resp.body!.getReader()
+    const decoder = new TextDecoder()
+    let buf = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      const lines = buf.split('\n')
+      buf = lines.pop() ?? ''
+      for (const line of lines) {
+        const raw = line.trim()
+        if (!raw.startsWith('data: ')) continue
+        try {
+          const item = JSON.parse(raw.slice(6))
+          if (item.type === 'progress') {
+            progressDone.value = item.done
+            progressTotal.value = item.total
+          } else if (item.type === 'result') {
+            results.value.push(item.data as StockScreenResult)
+          } else if (item.type === 'done') {
+            total.value = results.value.length
+            screening.value = false
+            return
+          }
+        } catch {/* ignore */}
+      }
+    }
   } catch (e: any) {
     screenError.value = e.message ?? '筛选失败'
     results.value = []
@@ -349,6 +408,32 @@ function signalBadgeClass(type: string) {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+.progress-wrap {
+  width: 100%;
+  max-width: 300px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.progress-bar {
+  flex: 1;
+  height: 4px;
+  background: var(--bg-secondary);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-blue), #38bdf8);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+.progress-text {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
 .results-error {
   text-align: center;
   padding: 40px 24px;
@@ -464,4 +549,19 @@ function signalBadgeClass(type: string) {
   font-size: 0.65rem;
   padding: 2px 6px;
 }
+
+.load-more-btn {
+  width: 100%;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--accent-blue);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+  text-align: center;
+}
+.load-more-btn:active { background: var(--bg-hover); }
 </style>

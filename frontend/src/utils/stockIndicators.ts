@@ -70,6 +70,41 @@ export function macdGoldCrossIndices(dif: number[], dea: number[]): number[] {
   return crosses
 }
 
+/** RSI（相对强弱指数） */
+export function calcRSI(closes: number[], period = 14): { rsi: (number | null)[] } {
+  const len = closes.length
+  const rsi: (number | null)[] = new Array(len).fill(null)
+  if (len < period + 1) return { rsi }
+
+  // 计算 N 日内涨跌幅均值
+  const gains: number[] = []
+  const losses: number[] = []
+  for (let i = 1; i < len; i++) {
+    const diff = closes[i] - closes[i - 1]
+    gains.push(diff > 0 ? diff : 0)
+    losses.push(diff < 0 ? -diff : 0)
+  }
+
+  let avgGain = gains.slice(0, period).reduce((a, b) => a + b, 0) / period
+  let avgLoss = losses.slice(0, period).reduce((a, b) => a + b, 0) / period
+
+  for (let i = period; i < len; i++) {
+    if (avgLoss === 0) {
+      rsi[i] = 100
+    } else {
+      const rs = avgGain / avgLoss
+      rsi[i] = 100 - 100 / (1 + rs)
+    }
+    // 移动窗口更新均值
+    const g = gains[i - 1]
+    const l = losses[i - 1]
+    avgGain = (avgGain * (period - 1) + g) / period
+    avgLoss = (avgLoss * (period - 1) + l) / period
+  }
+
+  return { rsi }
+}
+
 export function skdjGoldCrossIndices(sk: (number | null)[], sd: (number | null)[]): number[] {
   const crosses: number[] = []
   for (let i = 1; i < sk.length; i++) {

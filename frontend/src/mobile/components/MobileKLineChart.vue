@@ -18,7 +18,7 @@ import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import type { KLine, Bi, XiangSegment, Zhongshu, Signal, AISignal, SupportResistance } from '@/api/stock'
 import type { IndicatorConfig } from '@/stores/chanlun'
-import { calcMACD, calcSKDJ, computeDualMacdSkdjMarkerIndices } from '@/utils/stockIndicators'
+import { calcMACD, calcSKDJ, calcRSI, computeDualMacdSkdjMarkerIndices } from '@/utils/stockIndicators'
 
 const props = defineProps<{
   klines: KLine[]
@@ -349,6 +349,7 @@ function buildOption() {
     klines.map(k => k.low),
     closes
   )
+  const rsiData = calcRSI(closes)
 
   // 副图开关
   const subCount = [ind.volume, ind.macd, ind.rsi, ind.skdj].filter(Boolean).length
@@ -406,7 +407,7 @@ function buildOption() {
       itemStyle: { color: macdData.dif[i] >= 0 ? UP_COLOR : DOWN_COLOR }
     }) },
     { key: 'rsi' as const, label: 'RSI', color: '#f59e0b', calc: (i: number) => ({
-      value: skdjData.sk[i] ?? null,  // RSI placeholder, using SKDJ K as proxy
+      value: rsiData.rsi[i] ?? null,
       itemStyle: {}
     }) },
     { key: 'skdj' as const, label: 'SKDJ', color: '#a78bfa', calc: (i: number) => ({
@@ -450,7 +451,7 @@ function buildOption() {
         xAxisIndex: subIdx, yAxisIndex: subIdx,
         lineStyle: { width: 1, color: '#f59e0b' }, symbol: 'none', smooth: true, z: 5 })
     } else if (def.key === 'rsi') {
-      seriesList.push({ name: 'RSI', type: 'line', data: macdData.dif,  // placeholder — replace with real RSI if available
+      seriesList.push({ name: 'RSI', type: 'line', data: rsiData.rsi,
         xAxisIndex: subIdx, yAxisIndex: subIdx,
         lineStyle: { width: 1.2, color: def.color }, symbol: 'none', smooth: true, z: 5 })
     } else {

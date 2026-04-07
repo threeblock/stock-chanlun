@@ -2,6 +2,10 @@
   <div class="card signal-card">
     <div class="card-header">
       <span class="card-title">缠论信号</span>
+      <div class="header-right">
+        <span v-if="updatedAt" class="card-time">{{ updatedAt }}</span>
+        <span class="info-icon" title="一买=首次底部背驰买入 | 二买=回踩不破一买买入 | 三买=突破中枢后回踩买入 | 一卖=首次顶部背驰卖出 | 二卖=反弹不破一卖卖出 | 三卖=跌破中枢后反弹卖出">?</span>
+      </div>
     </div>
 
     <div v-if="signals.length === 0" class="empty-signals">
@@ -56,7 +60,7 @@
 import { ref, computed } from 'vue'
 import type { Signal } from '../../api/stock'
 
-const props = defineProps<{ signals: Signal[] }>()
+const props = defineProps<{ signals: Signal[]; updatedAt?: string | null }>()
 
 const visibleCount = ref(5)
 
@@ -92,6 +96,25 @@ function formatDate(d: string) {
 
 <style scoped>
 .signal-card { padding: 14px; }
+.card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.card-title { font-size: 0.85rem; font-weight: 700; }
+.header-right { display: flex; align-items: center; gap: 6px; }
+.card-time { font-size: 0.65rem; color: var(--text-muted); font-family: var(--font-mono); }
+.info-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  cursor: help;
+  line-height: 1;
+}
 
 .empty-signals {
   text-align: center;
