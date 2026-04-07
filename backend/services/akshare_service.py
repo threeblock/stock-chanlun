@@ -749,6 +749,127 @@ def get_industry_board_movers(limit_each: int = 5) -> dict:
     return {"top": top, "bottom": bottom}
 
 
+def _em_request(url: str, params: dict, *, timeout: float = 25.0) -> dict | None:
+    """东方财富 API 请求：多域名兜底，禁用代理，直连。
+    East Money 接口返回 GBK 编码，手动解码避免乱码。"""
+    hosts = [
+        "https://push2delay.eastmoney.com",
+        "https://82.push2.eastmoney.com",
+        "https://push2.eastmoney.com",
+    ]
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": "https://quote.eastmoney.com/",
+    }
+    for base in hosts:
+        try:
+            client = _get_client()
+            resp = client.get(f"{base}{url}", params=params, timeout=timeout, headers=headers)
+            resp.raise_for_status()
+            raw = resp.content
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                text = raw.decode("gbk", errors="replace")
+            import json
+            return json.loads(text)
+        except Exception as e:
+            print(f"[EM] {base}{url} 失败: {e}")
+    return None
+
+
+_EM_INDUSTRY_NAME_MAP: dict[str, str] = {}
+_INDUSTRY_MAP_LOADED = False
+
+
+def _load_industry_name_map() -> None:
+    """加载行业板块名称→代码映射（m:90+t:2），分页拉取直到取完全部。"""
+    global _EM_INDUSTRY_NAME_MAP, _INDUSTRY_MAP_LOADED
+    if _INDUSTRY_MAP_LOADED:
+        return
+    page, page_size, total = 1, 100, None
+    while True:
+        js = _em_request(
+            "/api/qt/clist/get",
+            {
+                "pn": page,
+                "pz": page_size,
+                "po": 1,
+                "np": 1,
+                "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+                "fltt": 2,
+                "invt": 2,
+                "fid": "f3",
+                "fs": "m:90+t:2",
+                "fields": "f14,f12",
+            },
+            timeout=30.0,
+        )
+        if not js:
+            break
+        data = js.get("data") or {}
+        if total is None:
+            total = int(data.get("total", 0) or 0)
+        diff = data.get("diff") or []
+        for row in diff:
+            name = str(row.get("f14") or "").strip()
+            code = str(row.get("f12") or "").strip()
+            if name and code:
+                _EM_INDUSTRY_NAME_MAP[name] = code
+        if len(diff) < page_size or len(_EM_INDUSTRY_NAME_MAP) >= total:
+            break
+        page += 1
+    _INDUSTRY_MAP_LOADED = True
+    print(f"[板块] 行业名称映射加载完毕，共 {len(_EM_INDUSTRY_NAME_MAP)} 条（total={total}）")
+
+
+_EM_CONCEPT_NAME_MAP: dict[str, str] = {}
+_CONCEPT_MAP_LOADED = False
+
+
+def _load_concept_name_map() -> None:
+    """加载概念板块名称→代码映射（m:90+t:3），全量分页拉取。"""
+    global _EM_CONCEPT_NAME_MAP, _CONCEPT_MAP_LOADED
+    if _CONCEPT_MAP_LOADED:
+        return
+    page, page_size, total = 1, 100, None
+    while True:
+        js = _em_request(
+            "/api/qt/clist/get",
+            {
+                "pn": page,
+                "pz": page_size,
+                "po": 1,
+                "np": 1,
+                "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+                "fltt": 2,
+                "invt": 2,
+                "fid": "f3",
+                "fs": "m:90+t:3",
+                "fields": "f14,f12",
+            },
+            timeout=30.0,
+        )
+        if not js:
+            break
+        data = js.get("data") or {}
+        if total is None:
+            total = int(data.get("total", 0) or 0)
+        diff = data.get("diff") or []
+        for row in diff:
+            name = str(row.get("f14") or "").strip()
+            code = str(row.get("f12") or "").strip()
+            if name and code:
+                _EM_CONCEPT_NAME_MAP[name] = code
+        if len(diff) < page_size:
+            break  # 最后一页
+        if len(_EM_CONCEPT_NAME_MAP) >= total:
+            break  # 全部拉完
+        page += 1
+    _CONCEPT_MAP_LOADED = True
+    print(f"[板块] 概念名称映射加载完毕，共 {len(_EM_CONCEPT_NAME_MAP)} 条（total={total}）")
+
+
 def _finite_num(v, default: float = 0.0) -> float:
     try:
         if v is None or (isinstance(v, float) and pd.isna(v)):
@@ -759,7 +880,7 @@ def _finite_num(v, default: float = 0.0) -> float:
 
 
 def _parse_em_board_cons_df(df: pd.DataFrame | None) -> list[dict]:
-    """东方财富行业/概念成分股 DataFrame → 统一结构（列名：序号、代码、名称、最新价、涨跌幅…）"""
+    """东方财富行业/概念成分股 DataFrame → 统一结构。"""
     if df is None or df.empty:
         return []
     rows: list[dict] = []
@@ -786,11 +907,43 @@ def _parse_em_board_cons_df(df: pd.DataFrame | None) -> list[dict]:
     return rows
 
 
+def _parse_em_board_diff(diff: list[dict]) -> list[dict]:
+    """
+    解析东方财富板块成分 diff（字段 ID dict 格式）→ 统一结构。
+    关键字段：f12=代码, f14=名称, f2=最新价, f3=涨跌幅,
+              f4=涨跌额, f5=成交量, f6=成交额, f8=振幅,
+              f15=今开, f16=最高, f17=最低, f18=昨收,
+              f23=换手率, f24=市盈率-动态, f25=市净率
+    """
+    rows: list[dict] = []
+    for r in diff:
+        raw = str(r.get("f12") or "").strip()
+        digits = re.sub(r"\D", "", raw)
+        if not digits:
+            continue
+        code = digits.zfill(6)[-6:]
+        name = str(r.get("f14") or "").strip()
+        if not name:
+            continue
+        rows.append({
+            "code": code,
+            "name": name,
+            "price": round(_finite_num(r.get("f2")), 4),
+            "change_pct": round(_finite_num(r.get("f3")), 4),
+            "volume": round(_finite_num(r.get("f5")), 2),
+            "amount": round(_finite_num(r.get("f6")), 2),
+            "turnover_pct": round(_finite_num(r.get("f23")), 4),
+            "pe_ttm": round(_finite_num(r.get("f24")), 4),
+            "pb": round(_finite_num(r.get("f25")), 4),
+        })
+    return rows
+
+
 def get_board_constituents_em(board_name: str) -> dict:
     """
-    板块成分股（东方财富）：先行业板块 stock_board_industry_cons_em，
-    无数据再试概念板块 stock_board_concept_cons_em。
-    成分股按涨跌幅降序排列。
+    板块成分股（东方财富）：直接请求 East Money API，无需 akshare。
+    ① 先用行业板块映射查；② 兜底概念板块映射查。
+    成分股按涨跌幅降序排列，缓存 90 秒。
     """
     name = (board_name or "").strip()
     if not name:
@@ -801,27 +954,75 @@ def get_board_constituents_em(board_name: str) -> dict:
     if cached is not None:
         return cached
 
-    import akshare as ak
-
     stocks: list[dict] = []
     board_type: str | None = None
 
-    try:
-        df = ak.stock_board_industry_cons_em(symbol=name)
-        stocks = _parse_em_board_cons_df(df)
-        if stocks:
-            board_type = "industry"
-    except Exception as e:
-        print(f"[板块成分] 行业「{name}」失败: {e}")
+    # ── ① 行业板块 ──────────────────────────────────────────────
+    _load_industry_name_map()
+    board_code = _EM_INDUSTRY_NAME_MAP.get(name)
+    # 模糊匹配：找包含 name 的键
+    if not board_code:
+        for k, v in _EM_INDUSTRY_NAME_MAP.items():
+            if name in k or k in name:
+                board_code = v
+                print(f"[板块] 精确匹配失败，模糊匹配: {name!r} → {k!r} ({v})")
+                break
+    print(f"[板块] 查找行业: name={name!r}, found={board_code}, total_keys={len(_EM_INDUSTRY_NAME_MAP)}, sample_keys={list(_EM_INDUSTRY_NAME_MAP.keys())[:5]}")
+    if board_code:
+        js = _em_request(
+            "/api/qt/clist/get",
+            {
+                "pn": 1,
+                "pz": 200,
+                "po": 1,
+                "np": 1,
+                "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+                "fltt": 2,
+                "invt": 2,
+                "fid": "f3",
+                "fs": f"b:{board_code}+f:!50",
+                "fields": "f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f12,f13,f14,f15,f16,f17,f18,f20,f21,f23,f24,f25,f22,f11,f62,f128,f136,f115,f45",
+            },
+            timeout=30.0,
+        )
+        if js:
+            diff = (js.get("data") or {}).get("diff") or []
+            if diff:
+                board_type = "industry"
+                stocks = _parse_em_board_diff(diff)
 
+    # ── ② 概念板块兜底 ─────────────────────────────────────────
     if not stocks:
-        try:
-            df = ak.stock_board_concept_cons_em(symbol=name)
-            stocks = _parse_em_board_cons_df(df)
-            if stocks:
-                board_type = "concept"
-        except Exception as e:
-            print(f"[板块成分] 概念「{name}」失败: {e}")
+        _load_concept_name_map()
+        board_code = _EM_CONCEPT_NAME_MAP.get(name)
+        if not board_code:
+            for k, v in _EM_CONCEPT_NAME_MAP.items():
+                if name in k or k in name:
+                    board_code = v
+                    print(f"[板块] 概念模糊匹配: {name!r} → {k!r} ({v})")
+                    break
+        if board_code:
+            js = _em_request(
+                "/api/qt/clist/get",
+                {
+                    "pn": 1,
+                    "pz": 200,
+                    "po": 1,
+                    "np": 1,
+                    "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+                    "fltt": 2,
+                    "invt": 2,
+                    "fid": "f3",
+                    "fs": f"b:{board_code}+f:!50",
+                    "fields": "f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f12,f13,f14,f15,f16,f17,f18,f20,f21,f23,f24,f25,f22,f11,f62,f128,f136,f115,f45",
+                },
+                timeout=30.0,
+            )
+            if js:
+                diff = (js.get("data") or {}).get("diff") or []
+                if diff:
+                    board_type = "concept"
+                    stocks = _parse_em_board_diff(diff)
 
     stocks.sort(key=lambda x: x["change_pct"], reverse=True)
     for i, s in enumerate(stocks, start=1):
