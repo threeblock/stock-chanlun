@@ -12,6 +12,10 @@ import MobileWatchlistView from '../mobile/views/MobileWatchlistView.vue'
 const router = createRouter({
   // 与 vite.config.ts 的 base: '/stock-chanlun/' 保持一致
   history: createWebHistory('/stock-chanlun/'),
+  scrollBehavior(_to, _from, savedPosition) {
+    if (savedPosition) return savedPosition
+    return { top: 0, behavior: 'smooth' }
+  },
   routes: [
     // ── PC 端路由 ──────────────────────────────────────────────────────
     { path: '/', component: HomeView },

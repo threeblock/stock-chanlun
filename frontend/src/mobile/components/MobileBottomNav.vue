@@ -1,6 +1,6 @@
 <template>
   <nav class="tab-bar">
-    <router-link to="/m" class="tab-item" :class="{ active: route.path === '/m' }" :exact="true">
+    <router-link to="/m" class="tab-item" :class="{ active: isActive('/m') }">
       <div class="tab-icon-wrap">
         <svg class="tab-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
@@ -10,7 +10,7 @@
       <span class="tab-label">首页</span>
     </router-link>
 
-    <router-link to="/m/screen" class="tab-item" :class="{ active: route.path === '/m/screen' }">
+    <router-link to="/m/screen" class="tab-item" :class="{ active: isActive('/m/screen') }">
       <div class="tab-icon-wrap">
         <svg class="tab-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
@@ -19,7 +19,7 @@
       <span class="tab-label">选股</span>
     </router-link>
 
-    <router-link to="/m/watchlist" class="tab-item" :class="{ active: route.path === '/m/watchlist' }">
+    <router-link to="/m/watchlist" class="tab-item" :class="{ active: isActive('/m/watchlist') }">
       <div class="tab-icon-wrap">
         <svg class="tab-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
@@ -32,7 +32,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useWatchlistStore } from '@/stores/watchlist'
 
@@ -41,9 +41,10 @@ const wlStore = useWatchlistStore()
 
 const watchCount = computed(() => wlStore.stocks.length)
 
-onMounted(() => {
-  wlStore.fetchWatchlist()
-})
+// 支持嵌套路由：/m/stock/xxx 也高亮"首页"
+function isActive(prefix: string): boolean {
+  return route.path === prefix || route.path.startsWith(prefix + '/')
+}
 </script>
 
 <style scoped>
@@ -55,7 +56,8 @@ onMounted(() => {
   z-index: 100;
   display: flex;
   align-items: stretch;
-  background: linear-gradient(180deg, rgba(11, 15, 20, 0.92) 0%, rgba(11, 15, 20, 0.98) 100%);
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border);
   backdrop-filter: blur(16px) saturate(1.2);
   -webkit-backdrop-filter: blur(16px) saturate(1.2);
   border-top: 1px solid var(--border);
@@ -83,6 +85,19 @@ onMounted(() => {
 
 .tab-item.active {
   color: var(--accent-cyan);
+  position: relative;
+}
+.tab-item.active::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 24px;
+  height: 2px;
+  border-radius: 0 0 2px 2px;
+  background: var(--accent-cyan);
+  box-shadow: 0 0 8px var(--glow-brand);
 }
 
 .tab-icon-wrap {
