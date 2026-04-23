@@ -192,12 +192,18 @@
           </div>
           <div class="chart-actions">
             <IndicatorSelector />
+            <button class="btn btn-ghost chart-action-btn" @click="exportCSV" title="导出 K 线 CSV">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              导出
+            </button>
           </div>
           <span v-if="store.klineUpdatedAt" class="chart-timestamp">K线 {{ store.klineUpdatedAt }}</span>
         </div>
 
         <!-- 主图区域上方：基本资料（与左侧行情互补） -->
-        <div v-if="infoPanelRows.length > 0" class="company-info card">
+        <div v-if="infoPanelRows.length > 0 || financeRows.length > 0" class="company-info card">
           <div class="company-info-head">
             <span class="company-info-title">基本资料</span>
             <span v-if="stockInfo?.名称" class="company-info-name">{{ stockInfo.名称 }}</span>
@@ -214,6 +220,14 @@
                 :class="row.valueClass"
               >{{ row.value }}</span>
             </div>
+            <div
+              v-for="row in financeRows"
+              :key="row.key"
+              class="company-info-cell"
+            >
+              <span class="ci-label">{{ row.label }}</span>
+              <span class="ci-value mono">{{ row.value }}</span>
+            </div>
           </div>
         </div>
 
@@ -227,6 +241,7 @@
           :ai-signal="store.aiSignal"
           :support-resistance="store.chanlunResult?.supportResistance || []"
           :indicators="store.indicators"
+          :loading="store.loadingKline"
           @zoom-change="onZoomChange"
         />
         <VolumeChart v-if="store.indicators.volume" :klines="store.klines" :zoom-start="zoomStart" :zoom-end="zoomEnd" class="sub-chart" />
@@ -559,6 +574,41 @@ const infoPanelRows = computed((): InfoRow[] => {
   return rows
 })
 
+/** 基本资料增强：市值/股本/换手率（来自 extras.boards） */
+const financeRows = computed((): InfoRow[] => {
+  const b = extras.value?.boards
+  if (!b) return []
+  const rows: InfoRow[] = []
+  const push = (key: string, label: string, value: string) => {
+    if (value && value !== '—') rows.push({ key, label, value })
+  }
+  // 市值格式化
+  const fmtMkt = (v?: string | number) => {
+    if (v == null) return '—'
+    const n = typeof v === 'string' ? parseFloat(v) : v
+    if (!Number.isFinite(n) || n === 0) return '—'
+    if (n >= 1e12) return (n / 1e12).toFixed(2) + '万亿'
+    if (n >= 1e8) return (n / 1e8).toFixed(2) + '亿'
+    return n.toFixed(2) + '万'
+  }
+  const fmtShares = (v?: string | number) => {
+    if (v == null) return '—'
+    const n = typeof v === 'string' ? parseFloat(v) : v
+    if (!Number.isFinite(n) || n === 0) return '—'
+    if (n >= 1e8) return (n / 1e8).toFixed(2) + '亿'
+    if (n >= 1e4) return (n / 1e4).toFixed(2) + '万'
+    return n.toFixed(0)
+  }
+  for (const h of b.highlights ?? []) {
+    if (h.label.includes('总市值')) push('mkt_cap', '总市值', fmtMkt(h.value))
+    else if (h.label.includes('流通市值')) push('float_cap', '流通市值', fmtMkt(h.value))
+    else if (h.label.includes('总股本')) push('total_shares', '总股本', fmtShares(h.value))
+    else if (h.label.includes('流通股')) push('float_shares', '流通股', fmtShares(h.value))
+    else if (h.label.includes('上市时间')) push('listed_date', '上市时间', h.value)
+  }
+  return rows
+})
+
 const depthAsks = computed(() => extras.value?.depth?.asks ?? [])
 const depthBids = computed(() => extras.value?.depth?.bids ?? [])
 const hasDepth = computed(() => {
@@ -643,6 +693,12 @@ function formatVolume(v?: number) {
   if (v >= 1e8) return (v / 1e8).toFixed(2) + '亿'
   if (v >= 1e4) return (v / 1e4).toFixed(2) + '万'
   return v.toString()
+}
+
+function exportCSV() {
+  const code = stockCode.value
+  const level = currentLevel.value
+  window.open(`/api/stocks/${code}/export?level=${level}`, '_blank')
 }
 
 // 键盘快捷键
@@ -1020,7 +1076,8 @@ watch(() => route.params.code, loadData)
 .chart-area { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .chart-header { display: flex; align-items: center; gap: 8px; }
 .chart-level-tabs { flex-shrink: 0; }
-.chart-actions { margin-left: auto; }
+.chart-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.chart-action-btn { font-size: 0.72rem; padding: 5px 10px; display: flex; align-items: center; gap: 4px; }
 .chart-timestamp { font-size: 0.65rem; color: var(--text-muted); font-family: var(--font-mono); white-space: nowrap; }
 .sub-chart { height: 100px; }
 

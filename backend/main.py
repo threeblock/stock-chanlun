@@ -25,6 +25,7 @@ import math
 import os
 import json
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import asyncio
 from datetime import datetime, timezone
 
@@ -59,13 +60,17 @@ from services.akshare_service import (
     get_stock_depth_em, get_stock_boards_em, get_stock_symbol_news_em,
     get_board_constituents_em,
 )
+from utils import chanlun_cache, chanlun_limiter, kline_limiter
 
 # ─── FastAPI App ──────────────────────────────────────────────────────────────
 
 app = FastAPI(
-    title="ChanStock API",
-    description="缠论智能股票分析系统 API",
-    version="0.1.0"
+    title="ChanStock 缠论分析 API",
+    description="缠论智能股票分析系统 — 提供 K 线数据、市场行情、缠论中枢/笔/段分析、AI 策略信号、选股等多维度功能",
+    version="0.2.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
 )
 
 app.add_middleware(
@@ -99,6 +104,12 @@ def _level_to_period(level: str) -> str:
 
 def _run_analysis(code: str, level: str, kline_limit: int = 500) -> ChanlunAnalysis:
     """执行缠论分析（与 /api/stocks/{code}/kline 默认 limit=500 对齐，避免笔日期落在前端 K 线之外）"""
+    # 先尝试从缓存读取（5分钟 TTL）
+    cache_key = f"{code}:{level}"
+    cached = chanlun_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     period = _level_to_period(level)
     df = get_kline_hist(code, period=period,
                         start_date=None, adjust="qfq")
@@ -113,7 +124,44 @@ def _run_analysis(code: str, level: str, kline_limit: int = 500) -> ChanlunAnaly
     engine = ChanlunEngine(df)
     result = engine.analyze(level=level)
     result.stock_code = code
+
+    # 写入缓存（5分钟）
+    chanlun_cache.set(cache_key, result)
     return result
+
+
+def _get_kline_df_for_ai(code: str, level: str, kline_limit: int = 500) -> tuple[pd.DataFrame, ChanlunAnalysis]:
+    """
+    为 AI 分析一次性获取 K 线 DataFrame 和缠论结果，
+    避免 AI 接口重复请求 K 线数据。
+    返回 (df, result)，df 已截断到 kline_limit。
+    """
+    # 优先从缓存读取缠论结果
+    cache_key = f"{code}:{level}"
+    cached_result = chanlun_cache.get(cache_key)
+
+    period = _level_to_period(level)
+    df = get_kline_hist(code, period=period, start_date=None, adjust="qfq")
+
+    if df.empty or len(df) < 20:
+        raise HTTPException(status_code=404,
+                            detail=f"{code} {level}级别K线数据不足（仅{len(df) if not df.empty else 0}根），请换日线/30分钟级别尝试")
+
+    if len(df) > kline_limit:
+        df = df.tail(kline_limit).reset_index(drop=True)
+
+    # 复用缓存的分析结果（如果有的话，截断逻辑保持一致）
+    if cached_result is not None:
+        cached_result.stock_code = code
+        return df, cached_result
+
+    engine = ChanlunEngine(df)
+    result = engine.analyze(level=level)
+    result.stock_code = code
+
+    # 写入缓存（5分钟）
+    chanlun_cache.set(cache_key, result)
+    return df, result
 
 
 # ─── 股票数据 API ───────────────────────────────────────────────────────────
@@ -365,63 +413,112 @@ def stock_kline(
     }
 
 
-# ─── 缠论分析 API ───────────────────────────────────────────────────────────
+@app.get("/api/stocks/{code}/export", tags=["数据"])
+def export_stock_csv(
+    code: str,
+    level: str = Query("daily", pattern="^(1min|5min|15min|30min|60min|daily|weekly|monthly)$"),
+    limit: int = Query(500, le=2000),
+):
+    """
+    导出股票 K 线数据为 CSV 文件下载。
+    包含：日期、开盘、收盘、最高、最低、成交量。
+    """
+    import csv
+    import io
+    from fastapi.responses import StreamingResponse
 
-@app.get("/api/chanlun/{code}", tags=["缠论"])
-def analyze_chanlun(
+    period = _level_to_period(level)
+    df = get_kline_hist(code, period=period, adjust="qfq")
+    if df.empty:
+        raise HTTPException(status_code=404, detail="K线数据为空，无法导出")
+
+    df = df.tail(limit).reset_index(drop=True)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["日期", "开盘", "收盘", "最高", "最低", "成交量"])
+    for _, r in df.iterrows():
+        writer.writerow([
+            str(r['date'])[:10],
+            f"{r['open']:.2f}",
+            f"{r['close']:.2f}",
+            f"{r['high']:.2f}",
+            f"{r['low']:.2f}",
+            f"{r.get('volume', 0):.0f}",
+        ])
+
+    filename = f"{code}_{level}_{str(df['date'].iloc[-1])[:10]}.csv"
+    output.seek(0)
+
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{filename}",
+        }
+    )
+
+@app.get("/api/chanlun/{code}", tags=["缠论"], summary="缠论完整分析")
+async def analyze_chanlun(
     code: str,
     level: str = Query("daily", pattern="^(1min|5min|15min|30min|60min|daily|weekly|monthly)$"),
 ):
     """缠论完整分析"""
-    try:
-        result = _run_analysis(code, level)
-
-        return {
-            "stock_code": result.stock_code,
-            "level": result.level,
-            "trend": result.trend,
-            "summary": result.summary,
-            "bis": [
-                {
-                    "id": b.id,
-                    "start": str(b.start)[:19],
-                    "end": str(b.end)[:19],
-                    "direction": b.direction,
-                    "high": b.high,
-                    "low": b.low
-                }
-                for b in result.bis
-            ],
-            "xiangs": [
-                {
-                    "id": s.id,
-                    "start": str(s.start)[:19],
-                    "end": str(s.end)[:19],
-                    "direction": s.direction,
-                    "high": s.high,
-                    "low": s.low
-                }
-                for s in result.xiangs
-            ],
-            "zhongshus": [
-                {
-                    "id": z.id,
-                    "start": str(z.start)[:19],
-                    "end": str(z.end)[:19],
-                    "range_high": z.range_high,
-                    "range_low": z.range_low
-                }
-                for z in result.zhongshus
-            ],
-            "signals": [
-                {
-                    "type": s.type,
-                    "level": s.level,
-                    "price": s.price,
-                    "datetime": str(s.datetime)[:19],
-                    "confidence": s.confidence,
-                    "stop_loss": s.stop_loss,
-                    "take_profit": s.take_profit,
+    # 限流检查：每分钟最多 120 次
+    if not chanlun_limiter.try_acquire(code):
+        remaining = chanlun_limiter.get_remaining(code)
+        raise HTTPException(
+            status_code=429,
+            detail=f"请求过于频繁，请 {remaining} 秒后再试"
+        )
+    # CPU 密集型缠论分析放到线程池，不阻塞事件循环
+    result = await asyncio.to_thread(_run_analysis, code, level)
+    return {
+        "stock_code": result.stock_code,
+        "level": result.level,
+        "trend": result.trend,
+        "summary": result.summary,
+        "bis": [
+            {
+                "id": b.id,
+                "start": str(b.start)[:19],
+                "end": str(b.end)[:19],
+                "direction": b.direction,
+                "high": b.high,
+                "low": b.low
+            }
+            for b in result.bis
+        ],
+        "xiangs": [
+            {
+                "id": s.id,
+                "start": str(s.start)[:19],
+                "end": str(s.end)[:19],
+                "direction": s.direction,
+                "high": s.high,
+                "low": s.low
+            }
+            for s in result.xiangs
+        ],
+        "zhongshus": [
+            {
+                "id": z.id,
+                "start": str(z.start)[:19],
+                "end": str(z.end)[:19],
+                "range_high": z.range_high,
+                "range_low": z.range_low
+            }
+            for z in result.zhongshus
+        ],
+        "signals": [
+            {
+                "type": s.type,
+                "level": s.level,
+                "price": s.price,
+                "datetime": str(s.datetime)[:19],
+                "confidence": s.confidence,
+                "stop_loss": s.stop_loss,
+                "take_profit": s.take_profit,
                     "description": s.description
                 }
                 for s in result.signals
@@ -438,117 +535,201 @@ def analyze_chanlun(
                 for lvl in result.support_resistance
             ]
         }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/chanlun/{code}/ai", tags=["缠论"])
-def ai_signal(
+@app.get("/api/chanlun/{code}/multi-level", tags=["缠论"], summary="多级别并行缠论分析")
+async def chanlun_multi_level(
+    code: str,
+    levels: str = Query(
+        "daily,weekly,30min",
+        description="逗号分隔的分析级别，如 daily,weekly,30min"
+    ),
+):
+    """多级别并行缠论分析"""
+    if not chanlun_limiter.try_acquire(code):
+        remaining = chanlun_limiter.get_remaining(code)
+        raise HTTPException(status_code=429, detail=f"请求过于频繁，请 {remaining} 秒后再试")
+
+    import time
+    t0 = time.time()
+
+    level_list = [l.strip() for l in levels.split(",") if l.strip()]
+    level_list = list(dict.fromkeys(level_list))  # 去重保持顺序
+
+    def _serialize_result(result: ChanlunAnalysis) -> dict:
+        return {
+            "level": result.level,
+            "trend": result.trend,
+            "summary": result.summary,
+            "bis_count": len(result.bis),
+            "zhongshus_count": len(result.zhongshus),
+            "signals_count": len(result.signals),
+            "signals": [
+                {
+                    "type": s.type,
+                    "price": s.price,
+                    "datetime": str(s.datetime)[:19],
+                    "confidence": s.confidence,
+                    "description": s.description
+                }
+                for s in result.signals[-3:]
+            ],
+            "supportResistance": [
+                {
+                    "type": lvl.type,
+                    "price": lvl.price,
+                    "datetime": str(lvl.datetime)[:19],
+                    "strength": lvl.strength
+                }
+                for lvl in result.support_resistance[-5:]
+            ]
+        }
+
+    results: dict[str, dict | str] = {}
+
+    def _safe_analyze(level: str) -> tuple[str, dict | str]:
+        try:
+            cache_key = f"{code}:{level}"
+            cached = chanlun_cache.get(cache_key)
+            if cached is not None:
+                return level, _serialize_result(cached)
+
+            period = _level_to_period(level)
+            df = get_kline_hist(code, period=period, adjust="qfq")
+            if df.empty or len(df) < 20:
+                return level, "数据不足"
+
+            engine = ChanlunEngine(df)
+            result = engine.analyze(level=level)
+            result.stock_code = code
+            chanlun_cache.set(cache_key, result)
+            return level, _serialize_result(result)
+        except HTTPException:
+            return level, "数据不足"
+        except Exception as e:
+            return level, str(e)
+
+    # 并行执行多级别分析（最多 4 个线程），不阻塞事件循环
+    def _run_pool():
+        with ThreadPoolExecutor(max_workers=min(len(level_list), 4)) as pool:
+            futures = {pool.submit(_safe_analyze, lv): lv for lv in level_list}
+            for future in as_completed(futures):
+                lv, data = future.result(timeout=60)
+                results[lv] = data
+
+    await asyncio.to_thread(_run_pool)
+
+    ordered = {lv: results.get(lv, "未知错误") for lv in level_list}
+    t1 = time.time()
+    return {
+        "code": code,
+        "levels": ordered,
+        "count": len(level_list),
+        "elapsed_ms": round((t1 - t0) * 1000, 1),
+    }
+
+
+@app.get("/api/chanlun/{code}/ai", tags=["缠论"], summary="AI 策略信号（背驰 + 规则 + LLM）")
+async def ai_signal(
     code: str,
     level: str = Query("daily"),
     model: str = Query("deepseek", description="AI 模型：deepseek / gemini")
 ):
     """
-    AI 策略信号：
-    - rule-based：背驰检测 + 缠论规则（始终执行）
-    - LLM：DeepSeek / Gemini 增强分析（需要 API Key）
+    AI 策略信号：rule-based + LLM 增强分析
     """
-    try:
-        result = _run_analysis(code, level)
-        current_price = float(result.klines[-1].close) if result.klines else 0.0
+    # 限流检查
+    if not chanlun_limiter.try_acquire(code):
+        remaining = chanlun_limiter.get_remaining(code)
+        raise HTTPException(status_code=429, detail=f"请求过于频繁，请 {remaining} 秒后再试")
 
-        # 背驰检测 — 直接复用已有K线DataFrame，不重复请求
-        period = _level_to_period(level)
-        df_for_div = get_kline_hist(code, period=period, adjust="qfq")
-        divergence = None
-        if not df_for_div.empty:
-            try:
-                div_detector = DivergenceDetector(df_for_div.tail(200))
-                divergence = div_detector.check_divergence(result.bis)
-            except Exception:
-                pass
+    # K线获取 + 缠论分析是 CPU/IO 密集型，放到线程池
+    df_for_ai, result = await asyncio.to_thread(_get_kline_df_for_ai, code, level)
+    current_price = float(result.klines[-1].close) if result.klines else 0.0
 
-        # 走势分类
-        classifier = WaveClassifier()
-        wave_class = classifier.classify(result.xiangs, result.zhongshus, current_price)
-
-        # 规则策略
-        engine = StrategyEngine(
-            signals=result.signals,
-            trend=wave_class['trend'],
-            current_price=current_price,
-            current_level=level,
-            zhongshus=result.zhongshus,
-            divergence=divergence
-        )
-        signal = engine.generate_signal()
-        signal.stock_code = code
-
-        # 多级别共振（日 + 30分钟）— 只取日线趋势，不重跑完整分析
-        resonance = None
-        if level == "30min":
-            try:
-                daily_df = get_kline_hist(code, period="daily", adjust="qfq")
-                if not daily_df.empty:
-                    from chanlun.engine import ChanlunEngine
-                    daily_result = ChanlunEngine(daily_df).analyze(level="daily")
-                    daily_cls = WaveClassifier().classify(
-                        daily_result.xiangs, daily_result.zhongshus,
-                        float(daily_result.klines[-1].close) if daily_result.klines else 0.0
-                    )
-                    resonance = classifier.multi_level_resonance([
-                        {"trend": wave_class, "level": level},
-                        {"trend": daily_cls, "level": "daily"}
-                    ])
-            except Exception:
-                pass
-
-        # LLM 增强
-        llm_result = None
-        llm_error = None
+    # 背驰检测 — 直接复用已有 K 线 DataFrame
+    divergence = None
+    if not df_for_ai.empty:
         try:
-            llm = get_llm_client(model)
-            prompt = build_analysis_prompt(
-                code=code,
-                level=level,
-                klines=[k.__dict__ for k in result.klines],
-                trend=wave_class['trend'],
-                divergence=divergence,
-                signals=[s.__dict__ for s in result.signals],
-                zhongshus=[z.__dict__ for z in result.zhongshus],
-                bis=[b.__dict__ for b in result.bis],
-            )
-            raw = llm.chat(prompt, system=SYSTEM_PROMPT, temperature=0.3)
-            llm_result = parse_llm_response(raw)
-        except Exception as e:
-            llm_error = str(e)
+            div_detector = DivergenceDetector(df_for_ai.tail(200))
+            divergence = div_detector.check_divergence(result.bis)
+        except Exception:
+            pass
 
-        return {
-            "stock_code": signal.stock_code,
-            "level": signal.level,
-            "direction": llm_result.get("direction") if llm_result else signal.direction,
-            "confidence": llm_result.get("confidence") if llm_result else signal.confidence,
-            "risk_level": llm_result.get("risk_level") if llm_result else signal.risk_level,
-            "entry_price": llm_result.get("entry_price") or signal.entry_price,
-            "stop_loss": llm_result.get("stop_loss") or signal.stop_loss,
-            "take_profit": llm_result.get("take_profit") or signal.take_profit,
-            "holding_period": llm_result.get("holding_period") if llm_result else signal.holding_period,
-            "description": llm_result.get("reasoning") if llm_result else signal.description,
-            "trend": wave_class['trend'],
-            "divergence": divergence,
-            "resonance": resonance,
-            "llm": {
-                "model": model,
-                "used": llm_result is not None,
-                "error": llm_error,
-            }
-        }
-    except HTTPException:
-        raise
+    # 走势分类
+    classifier = WaveClassifier()
+    wave_class = classifier.classify(result.xiangs, result.zhongshus, current_price)
+
+    # 规则策略
+    engine = StrategyEngine(
+        signals=result.signals,
+        trend=wave_class['trend'],
+        current_price=current_price,
+        current_level=level,
+        zhongshus=result.zhongshus,
+        divergence=divergence
+    )
+    signal = engine.generate_signal()
+    signal.stock_code = code
+
+    # 多级别共振（日 + 30分钟）— 只取日线趋势，不重跑完整分析
+    resonance = None
+    if level == "30min":
+        try:
+            daily_df = get_kline_hist(code, period="daily", adjust="qfq")
+            if not daily_df.empty:
+                daily_result = ChanlunEngine(daily_df).analyze(level="daily")
+                daily_cls = WaveClassifier().classify(
+                    daily_result.xiangs, daily_result.zhongshus,
+                    float(daily_result.klines[-1].close) if daily_result.klines else 0.0
+                )
+                resonance = classifier.multi_level_resonance([
+                    {"trend": wave_class, "level": level},
+                    {"trend": daily_cls, "level": "daily"}
+                ])
+        except Exception:
+            pass
+
+    # LLM 增强
+    llm_result = None
+    llm_error = None
+    try:
+        llm = get_llm_client(model)
+        prompt = build_analysis_prompt(
+            code=code,
+            level=level,
+            klines=[k.__dict__ for k in result.klines],
+            trend=wave_class['trend'],
+            divergence=divergence,
+            signals=[s.__dict__ for s in result.signals],
+            zhongshus=[z.__dict__ for z in result.zhongshus],
+            bis=[b.__dict__ for b in result.bis],
+        )
+        raw = llm.chat(prompt, system=SYSTEM_PROMPT, temperature=0.3)
+        llm_result = parse_llm_response(raw)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        llm_error = str(e)
+
+    return {
+        "stock_code": signal.stock_code,
+        "level": signal.level,
+        "direction": llm_result.get("direction") if llm_result else signal.direction,
+        "confidence": llm_result.get("confidence") if llm_result else signal.confidence,
+        "risk_level": llm_result.get("risk_level") if llm_result else signal.risk_level,
+        "entry_price": llm_result.get("entry_price") or signal.entry_price,
+        "stop_loss": llm_result.get("stop_loss") or signal.stop_loss,
+        "take_profit": llm_result.get("take_profit") or signal.take_profit,
+        "holding_period": llm_result.get("holding_period") if llm_result else signal.holding_period,
+        "description": llm_result.get("reasoning") if llm_result else signal.description,
+        "trend": wave_class['trend'],
+        "divergence": divergence,
+        "resonance": resonance,
+        "llm": {
+            "model": model,
+            "used": llm_result is not None,
+            "error": llm_error,
+        }
+    }
 
 
 # ─── 自选股管理 API（持久化到 JSON 文件）──────────────────────────────────────
