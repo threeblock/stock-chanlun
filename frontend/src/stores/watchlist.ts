@@ -64,7 +64,18 @@ export const useWatchlistStore = defineStore('watchlist', () => {
     try {
       await stockApi.addWatch(code)
       // 乐观更新：直接追加，后端数据等下次 fetch 时刷新
-      stocks.value.push({ code, name: '', price: 0, change_pct: 0 })
+      stocks.value.push({
+        code,
+        name: '',
+        price: 0,
+        change_pct: 0,
+        volume: 0,
+        high: 0,
+        low: 0,
+        open: 0,
+        prev_close: 0,
+        amount: 0,
+      })
       await fetchWatchlist()
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : String(e)

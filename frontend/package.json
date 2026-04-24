@@ -4,8 +4,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "typecheck": "vue-tsc --noEmit",
     "build": "vue-tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check": "npm run typecheck && npm run build"
   },
   "dependencies": {
     "axios": "^1.7.9",

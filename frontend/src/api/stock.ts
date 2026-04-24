@@ -6,38 +6,48 @@ const api = axios.create({
   timeout: 60000,
 })
 
+const inflightGetRequests = new Map<string, Promise<unknown>>()
+let searchAbortController: AbortController | null = null
+
+export function normalizeApiError(error: unknown): Error {
+  if (!axios.isAxiosError(error)) {
+    if (error instanceof Error) return error
+    return new Error('请求失败，请重试')
+  }
+
+  const status = error.response?.status
+  const data = error.response?.data
+  const msg = data?.message || data?.detail || data?.error || error.message
+
+  if (status === 401) return new Error('登录已过期，请重新登录')
+  if (status === 403) return new Error('无权限访问该资源')
+  if (status === 404) return new Error(data?.detail || data?.message || '请求的资源不存在')
+  if (status === 429) return new Error('请求过于频繁，请稍后再试')
+  if (status && status >= 500) {
+    return new Error(data?.detail || data?.message || '服务器开小差了，请稍后重试')
+  }
+  if (error.code === 'ECONNABORTED') return new Error('请求超时，请检查网络后重试')
+  if (!navigator.onLine) return new Error('网络已断开，请检查网络连接')
+  return new Error(msg || '请求失败，请重试')
+}
+
+function withGetDedupe<T>(key: string, factory: () => Promise<T>): Promise<T> {
+  const existing = inflightGetRequests.get(key) as Promise<T> | undefined
+  if (existing) return existing
+
+  const promise = factory().finally(() => {
+    inflightGetRequests.delete(key)
+  })
+  inflightGetRequests.set(key, promise)
+  return promise
+}
+
 // ─── 全局错误拦截 ──────────────────────────────────────────────────────────────
 
 api.interceptors.response.use(
   response => response,
   error => {
-    if (axios.isAxiosError(error)) {
-      const status = error.response?.status
-      const data = error.response?.data
-      const msg = data?.message || data?.detail || data?.error || error.message
-
-      let friendly = ''
-      if (status === 401) {
-        friendly = '登录已过期，请重新登录'
-      } else if (status === 403) {
-        friendly = '无权限访问该资源'
-      } else if (status === 404) {
-        friendly = data?.detail || data?.message || '请求的资源不存在'
-      } else if (status === 429) {
-        friendly = '请求过于频繁，请稍后再试'
-      } else if (status && status >= 500) {
-        friendly = data?.detail || data?.message || '服务器开小差了，请稍后重试'
-      } else if (error.code === 'ECONNABORTED') {
-        friendly = '请求超时，请检查网络后重试'
-      } else if (!navigator.onLine) {
-        friendly = '网络已断开，请检查网络连接'
-      } else {
-        friendly = msg || '请求失败，请重试'
-      }
-
-      return Promise.reject(new Error(friendly))
-    }
-    return Promise.reject(error)
+    return Promise.reject(normalizeApiError(error))
   }
 )
 
@@ -286,8 +296,12 @@ export interface Comment {
 
 export const stockApi = {
   search(q: string) {
+    if (searchAbortController) searchAbortController.abort()
+    searchAbortController = new AbortController()
+
     return api.get<{ stocks: { code: string; name: string }[]; total: number }>(
-      `/stocks/search?q=${q}`
+      `/stocks/search?q=${q}`,
+      { signal: searchAbortController.signal }
     )
   },
 
@@ -299,7 +313,9 @@ export const stockApi = {
   },
 
   marketOverview() {
-    return api.get<MarketOverview>('/market/overview', { timeout: 90000 })
+    return withGetDedupe('GET:/market/overview', () =>
+      api.get<MarketOverview>('/market/overview', { timeout: 90000 })
+    )
   },
 
   news(limit = 10) {
@@ -324,7 +340,9 @@ export const stockApi = {
   },
 
   quote(code: string) {
-    return api.get<Quote>(`/stocks/${code}/quote`)
+    return withGetDedupe(`GET:/stocks/${code}/quote`, () =>
+      api.get<Quote>(`/stocks/${code}/quote`)
+    )
   },
 
   kline(code: string, level: string, limit = 500, startDate?: string, endDate?: string) {

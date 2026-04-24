@@ -4,6 +4,7 @@
 import time
 import threading
 import functools
+import random
 import httpx
 from collections import OrderedDict
 from typing import Any, Callable, Optional
@@ -47,13 +48,39 @@ class LRUCache:
         with self._lock:
             self._cache.clear()
 
+    def purge_expired(self) -> int:
+        """主动清理过期条目，返回清理数量。"""
+        with self._lock:
+            now = time.time()
+            keys_to_remove = [
+                key for key, (_, timestamp) in self._cache.items()
+                if now - timestamp > self._ttl
+            ]
+            for key in keys_to_remove:
+                del self._cache[key]
+            return len(keys_to_remove)
+
+    def stats(self) -> dict[str, int]:
+        """返回缓存统计信息。"""
+        with self._lock:
+            return {
+                "size": len(self._cache),
+                "maxsize": self._maxsize,
+                "ttl_seconds": int(self._ttl),
+            }
+
 
 # ── 缠论分析结果缓存（5分钟 TTL，最多缓存 256 只股票） ──────────────────────
 chanlun_cache = LRUCache(maxsize=256, ttl=300.0)
 
 
 # ── HTTP 重试装饰器 ─────────────────────────────────────────────────────────
-def with_retry(max_attempts: int = 3, delay: float = 1.0, exceptions=(httpx.HTTPError, OSError)):
+def with_retry(
+    max_attempts: int = 3,
+    delay: float = 1.0,
+    jitter: float = 0.2,
+    exceptions=(httpx.HTTPError, OSError),
+):
     """
     HTTP 请求重试装饰器。
 
@@ -72,7 +99,11 @@ def with_retry(max_attempts: int = 3, delay: float = 1.0, exceptions=(httpx.HTTP
                 except exceptions as e:
                     last_exc = e
                     if attempt < max_attempts:
-                        time.sleep(delay * attempt)  # 指数退避
+                        # 指数退避 + 抖动，避免并发请求在同一时刻重试
+                        wait = delay * attempt
+                        if jitter > 0:
+                            wait += random.uniform(0, jitter)
+                        time.sleep(wait)
                     continue
             raise last_exc
         return wrapper

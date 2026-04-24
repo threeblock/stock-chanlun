@@ -18,7 +18,7 @@
  *     </div>
  *   </div>
  */
-import { ref, computed, onMounted, onUnmounted, type Ref } from 'vue'
+import { ref, computed, type CSSProperties, type Ref } from 'vue'
 
 export interface VirtualScrollOptions<T> {
   items: Ref<T[]>
@@ -27,7 +27,7 @@ export interface VirtualScrollOptions<T> {
   maxHeight?: number
 }
 
-export function useVirtualScroll<T extends Record<string, unknown>>(
+export function useVirtualScroll<T>(
   options: VirtualScrollOptions<T>
 ) {
   const { items, itemHeight, overscan = 3, maxHeight } = options
@@ -64,11 +64,15 @@ export function useVirtualScroll<T extends Record<string, unknown>>(
   const containerProps = computed(() => ({
     ref: containerRef,
     onScroll,
-    style: maxHeight !== undefined ? { maxHeight: `${maxHeight}px`, overflowY: 'auto' } : { overflowY: 'auto' }
+    style: (
+      maxHeight !== undefined
+        ? { maxHeight: `${maxHeight}px`, overflowY: 'auto' }
+        : { overflowY: 'auto' }
+    ) as CSSProperties
   }))
 
   const wrapperProps = computed(() => ({
-    style: { height: `${totalHeight.value}px`, position: 'relative' }
+    style: { height: `${totalHeight.value}px`, position: 'relative' } as CSSProperties
   }))
 
   return {
