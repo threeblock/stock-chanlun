@@ -28,7 +28,8 @@ export const defaultIndicators: IndicatorConfig = {
   ma20: true,
   ma60: true,
   bis: true,
-  xiangs: true,
+  /** 默认关闭线段，避免与「笔」叠两层折线导致杂乱；需要时在指标面板打开 */
+  xiangs: false,
   zhongshus: true,
   signals: true,
   aiLines: true,

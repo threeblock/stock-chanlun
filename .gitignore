@@ -320,6 +320,9 @@ $RECYCLE.BIN/
 # ============================================
 # Project Specific
 # ============================================
+# Claude Code / local agent skills (project-scoped)
+.claude/
+
 # Backend data and cache
 backend/data/
 backend/cache/
