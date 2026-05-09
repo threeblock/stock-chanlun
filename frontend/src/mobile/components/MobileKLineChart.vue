@@ -314,8 +314,14 @@ function applyGraphicOverlay() {
   for (const xiang of data.xiangs) {
     if (xiang._e < viewS || xiang._s > viewE) continue
     if (xiang._e < xiang._s) continue
-    const p1 = pixelAtIdxCached(xiang._s, xiang.high)
-    const p2 = pixelAtIdxCached(xiang._e, xiang.low)
+    const p1 = pixelAtIdxCached(
+      xiang._s,
+      xiang.direction === 'up' ? xiang.low : xiang.high
+    )
+    const p2 = pixelAtIdxCached(
+      xiang._e,
+      xiang.direction === 'up' ? xiang.high : xiang.low
+    )
     if (!p1 || !p2) continue
     const color = xiang.direction === 'up' ? '#ffe066' : '#ff9f7f'
     children.push({ type: 'line', shape: { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1] },

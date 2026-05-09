@@ -443,11 +443,19 @@ function applyChanlunGraphic() {
   }
 
   // ── 线段 ───────────────────────────────────────
+  // 与笔一致：向上线段为「起点低 → 终点高」，向下为「起点高 → 终点低」。
+  // 勿用 (起点 high → 终点 low)：会把向上线段画成左上到右下的错误斜线（high/low 为整段包络价）。
   for (const xiang of xiangs) {
     if (xiang._e < viewS || xiang._s > viewE) continue
     if (xiang._e < xiang._s) continue
-    const p1 = pixelAtIdxCached(xiang._s, xiang.high)
-    const p2 = pixelAtIdxCached(xiang._e, xiang.low)
+    const p1 = pixelAtIdxCached(
+      xiang._s,
+      xiang.direction === 'up' ? xiang.low : xiang.high
+    )
+    const p2 = pixelAtIdxCached(
+      xiang._e,
+      xiang.direction === 'up' ? xiang.high : xiang.low
+    )
     if (!p1 || !p2) continue
     const color = xiang.direction === 'up' ? '#ffe066' : '#ff9f7f'
     children.push({
