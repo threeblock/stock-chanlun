@@ -34,6 +34,7 @@ import * as echarts from 'echarts'
 import type { KLine, Bi, Zhongshu, Signal, AISignal, SupportResistance } from '../../api/stock'
 import type { IndicatorConfig } from '../../stores/chanlun'
 import { computeDualMacdSkdjMarkerIndices } from '../../utils/stockIndicators'
+import { simplifySupportResistanceLevels } from '../../utils/chartOverlayUtils'
 
 const props = defineProps<{
   klines: KLine[]
@@ -55,7 +56,7 @@ let chart: echarts.ECharts | null = null
 function getIndicators(): Required<IndicatorConfig> {
   return {
     ma5: true, ma20: true, ma60: true,
-    bis: true, xiangs: true, zhongshus: true, signals: true, aiLines: true,
+    bis: true, xiangs: false, zhongshus: true, signals: true, aiLines: true,
     supportResistance: true,
     volume: true, macd: true, rsi: true, skdj: true,
     ...(props.indicators || {})
@@ -169,6 +170,7 @@ function buildOption() {
 
   // 预处理缠论数据，提前计算 bar 下标（修复 date 对不齐时 _e=-1 导致整段被跳过）
   const nBar = dates.length
+  const refPx = props.klines.length > 0 ? props.klines[props.klines.length - 1].close : 1
   const overlayData: ChanlunOverlayPayload = {
     bis: ind.bis ? props.bis.flatMap(b => {
       const r = resolveBarRange(b.start, b.end, nBar, dates)
@@ -191,7 +193,9 @@ function buildOption() {
       return [{ ...s, _idx: ix }]
     }) : [],
     aiSignal: ind.aiLines ? props.aiSignal : null,
-    supportResistance: ind.supportResistance ? (props.supportResistance || []) : [],
+    supportResistance: ind.supportResistance
+      ? simplifySupportResistanceLevels(props.supportResistance || [], refPx)
+      : [],
     _n: nBar
   }
   chanlunOverlayCache = overlayData
@@ -212,9 +216,9 @@ function buildOption() {
       }
     }
   ]
-  if (ind.ma5) { legendData.push('MA5'); seriesList.push({ name: 'MA5', ...lineSeriesOpts, data: ma5, lineStyle: { width: 1.2, color: '#f0b429' }, emphasis: { disabled: true } }) }
-  if (ind.ma20) { legendData.push('MA20'); seriesList.push({ name: 'MA20', ...lineSeriesOpts, data: ma20, lineStyle: { width: 1.2, color: '#58a6ff' }, emphasis: { disabled: true } }) }
-  if (ind.ma60) { legendData.push('MA60'); seriesList.push({ name: 'MA60', ...lineSeriesOpts, data: ma60, lineStyle: { width: 1.2, color: '#bc8cff' }, emphasis: { disabled: true } }) }
+  if (ind.ma5) { legendData.push('MA5'); seriesList.push({ name: 'MA5', ...lineSeriesOpts, data: ma5, lineStyle: { width: 1, color: '#f0b429' }, emphasis: { disabled: true } }) }
+  if (ind.ma20) { legendData.push('MA20'); seriesList.push({ name: 'MA20', ...lineSeriesOpts, data: ma20, lineStyle: { width: 1, color: '#58a6ff' }, emphasis: { disabled: true } }) }
+  if (ind.ma60) { legendData.push('MA60'); seriesList.push({ name: 'MA60', ...lineSeriesOpts, data: ma60, lineStyle: { width: 1, color: '#bc8cff' }, emphasis: { disabled: true } }) }
 
   return {
     animation: false,
@@ -235,7 +239,7 @@ function buildOption() {
     yAxis: [{
       scale: true, gridIndex: 0,
       axisLine: { show: false }, axisTick: { show: false },
-      splitLine: { lineStyle: { color: '#21262d', type: 'dashed' } },
+      splitLine: { lineStyle: { color: 'rgba(33,38,45,0.35)', type: 'dashed' } },
       axisLabel: { color: '#7d8590', fontSize: 10 },
       axisPointer: { label: { show: true, color: '#e6edf3', backgroundColor: '#30363d' } }
     }],
@@ -382,9 +386,9 @@ function applyChanlunGraphic() {
       width: Math.max(xPx2 - xPx1, 4),
       height: Math.max(yPx2 - yPx1, 1),
       style: {
-        fill: 'rgba(188, 140, 255, 0.10)',
-        stroke: 'rgba(188, 140, 255, 0.60)',
-        lineWidth: 1.5,
+        fill: 'rgba(188, 140, 255, 0.06)',
+        stroke: 'rgba(188, 140, 255, 0.42)',
+        lineWidth: 1,
         lineDash: [5, 4]
       },
       z: 100,
@@ -417,21 +421,21 @@ function applyChanlunGraphic() {
     children.push({
       type: 'line',
       shape: { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1] },
-      style: { stroke: color, lineWidth: 2.5, opacity: 0.9 },
+      style: { stroke: color, lineWidth: 1.25, opacity: 0.52 },
       z: 102,
       silent: true
     })
     // 端点强调（更好读）
     children.push({
       type: 'circle',
-      shape: { cx: p1[0], cy: p1[1], r: 2.8 },
-      style: { fill: color, stroke: '#0d1117', lineWidth: 1 },
+      shape: { cx: p1[0], cy: p1[1], r: 2 },
+      style: { fill: color, stroke: '#0d1117', lineWidth: 0.8 },
       z: 103,
       silent: true
     })
     children.push({
       type: 'circle',
-      shape: { cx: p2[0], cy: p2[1], r: 2.8 },
+      shape: { cx: p2[0], cy: p2[1], r: 2 },
       style: { fill: color, stroke: '#0d1117', lineWidth: 1 },
       z: 103,
       silent: true
@@ -449,7 +453,7 @@ function applyChanlunGraphic() {
     children.push({
       type: 'line',
       shape: { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1] },
-      style: { stroke: color, lineWidth: 4, opacity: 0.6 },
+      style: { stroke: color, lineWidth: 2, opacity: 0.38 },
       z: 101,
       silent: true
     })
@@ -498,12 +502,12 @@ function applyChanlunGraphic() {
     const dash = isSupport ? [6, 4] : [8, 4]
     const label = isSupport ? `撑 ${lvl.price.toFixed(2)}` : `阻 ${lvl.price.toFixed(2)}`
     const strength = lvl.strength ?? 0.5
-    const lw = 0.8 + strength * 0.8  // 强度影响线宽
+    const lw = 0.55 + strength * 0.45  // 强度影响线宽（整体更细）
 
     children.push({
       type: 'line',
       shape: { x1: gridLeft, y1: yp, x2: gridRight, y2: yp },
-      style: { stroke: color, lineWidth: lw, opacity: 0.5 + strength * 0.35, lineDash: dash },
+      style: { stroke: color, lineWidth: lw, opacity: 0.22 + strength * 0.28, lineDash: dash },
       z: 98,
       silent: true
     })
@@ -512,9 +516,9 @@ function applyChanlunGraphic() {
       style: {
         text: label,
         fill: color,
-        fontSize: 10,
+        fontSize: 9,
         fontFamily: 'Noto Sans SC',
-        opacity: 0.7 + strength * 0.3
+        opacity: 0.45 + strength * 0.35
       },
       x: gridLeft + 6,
       y: yp - 4,
@@ -571,8 +575,9 @@ function applyChanlunGraphic() {
     }
   }
 
-  // ── MACD + SKDJ 双金叉（算法与副图 utils/stockIndicators 同源） ──
-  if (props.klines.length >= 30) {
+  // ── MACD + SKDJ 共振标记：仅当副图同时开启二者时再画，避免主图充斥黄圈 ──
+  const indLive = getIndicators()
+  if (props.klines.length >= 30 && indLive.macd && indLive.skdj) {
     const RESONANCE_WINDOW = 3
     const { indices: markIdxs } = computeDualMacdSkdjMarkerIndices(props.klines, RESONANCE_WINDOW)
     for (const idx of markIdxs) {
@@ -580,21 +585,21 @@ function applyChanlunGraphic() {
       if (!pt) continue
       children.push({
         type: 'circle',
-        shape: { cx: pt[0], cy: pt[1], r: 7 },
-        style: { fill: '#ffe066', stroke: '#0d1117', lineWidth: 2.5 },
+        shape: { cx: pt[0], cy: pt[1], r: 5 },
+        style: { fill: 'rgba(255,224,102,0.85)', stroke: '#0d1117', lineWidth: 1.5 },
         z: 106, silent: true
       })
       children.push({
         type: 'text',
         style: {
-          text: 'MACD+SKDJ',
-          fill: '#ffe066',
-          fontSize: 10, fontWeight: 700,
+          text: '共振',
+          fill: '#e6c355',
+          fontSize: 9, fontWeight: 600,
           fontFamily: 'Noto Sans SC',
           textAlign: 'center'
         },
         x: pt[0],
-        y: pt[1] - 12,
+        y: pt[1] - 10,
         z: 107, silent: true
       })
     }

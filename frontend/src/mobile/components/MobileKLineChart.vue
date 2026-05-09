@@ -51,6 +51,7 @@ import * as echarts from 'echarts'
 import type { KLine, Bi, XiangSegment, Zhongshu, Signal, AISignal, SupportResistance } from '@/api/stock'
 import type { IndicatorConfig } from '@/stores/chanlun'
 import { calcMACD, calcSKDJ, calcRSI, computeDualMacdSkdjMarkerIndices } from '@/utils/stockIndicators'
+import { simplifySupportResistanceLevels } from '@/utils/chartOverlayUtils'
 
 const LONG_PRESS_DELAY = 400
 const SWIPE_THRESHOLD = 50
@@ -87,7 +88,7 @@ let touchCount = 0
 function getIndicators(): Required<IndicatorConfig> {
   return {
     ma5: true, ma20: true, ma60: true,
-    bis: true, xiangs: true, zhongshus: true,
+    bis: true, xiangs: false, zhongshus: true,
     signals: true, aiLines: true, supportResistance: true,
     volume: true, macd: false, rsi: false, skdj: false,
     ...(props.indicators || {})
@@ -212,10 +213,12 @@ function buildOverlayData(): OverlayData {
   const dates = lastDates
   const n = dates.length
   const ind = getIndicators()
+  const refPx = props.klines.length ? props.klines[props.klines.length - 1].close : 1
 
-  const dualCrossIndices = props.klines.length >= 30
-    ? computeDualMacdSkdjMarkerIndices(props.klines, 3).indices
-    : []
+  const dualCrossIndices =
+    props.klines.length >= 30 && ind.macd && ind.skdj
+      ? computeDualMacdSkdjMarkerIndices(props.klines, 3).indices
+      : []
 
   return {
     bis: ind.bis ? props.bis.flatMap(b => {
@@ -234,7 +237,9 @@ function buildOverlayData(): OverlayData {
       const ix = dateToIdxRobust(s.datetime, dates)
       return ix >= 0 ? [{ ...s, _idx: ix }] : []
     }) : [],
-    supportResistance: ind.supportResistance ? (props.supportResistance || []) : [],
+    supportResistance: ind.supportResistance
+      ? simplifySupportResistanceLevels(props.supportResistance || [], refPx)
+      : [],
     dualCrossIndices,
     aiSignal: ind.aiLines ? (props.aiSignal ?? null) : null,
     _n: n,
@@ -281,7 +286,7 @@ function applyGraphicOverlay() {
     const yPx2 = Math.max(a[1], b[1])
     children.push({ type: 'rect', x: xPx1, y: yPx1,
       width: Math.max(xPx2 - xPx1, 4), height: Math.max(yPx2 - yPx1, 1),
-      style: { fill: 'rgba(188, 140, 255, 0.10)', stroke: 'rgba(188, 140, 255, 0.55)', lineWidth: 1.5, lineDash: [5, 4] },
+      style: { fill: 'rgba(188, 140, 255, 0.06)', stroke: 'rgba(188, 140, 255, 0.42)', lineWidth: 1, lineDash: [5, 4] },
       z: 100, silent: true })
     children.push({ type: 'text', style: { text: zs.range_high.toFixed(2), fill: 'rgba(188, 140, 255, 0.8)', fontSize: 9, fontFamily: 'monospace' },
       x: xPx1 + 3, y: yPx1 + 11, z: 101, silent: true })
@@ -298,10 +303,10 @@ function applyGraphicOverlay() {
     if (!p1 || !p2) continue
     const color = bi.direction === 'up' ? UP_COLOR : DOWN_COLOR
     children.push({ type: 'line', shape: { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1] },
-      style: { stroke: color, lineWidth: 2.5, opacity: 0.85 }, z: 102, silent: true })
-    children.push({ type: 'circle', shape: { cx: p1[0], cy: p1[1], r: 2.6 },
-      style: { fill: color, stroke: '#06080c', lineWidth: 1 }, z: 103, silent: true })
-    children.push({ type: 'circle', shape: { cx: p2[0], cy: p2[1], r: 2.6 },
+      style: { stroke: color, lineWidth: 1.25, opacity: 0.52 }, z: 102, silent: true })
+    children.push({ type: 'circle', shape: { cx: p1[0], cy: p1[1], r: 2 },
+      style: { fill: color, stroke: '#06080c', lineWidth: 0.8 }, z: 103, silent: true })
+    children.push({ type: 'circle', shape: { cx: p2[0], cy: p2[1], r: 2 },
       style: { fill: color, stroke: '#06080c', lineWidth: 1 }, z: 103, silent: true })
   }
 
@@ -314,7 +319,7 @@ function applyGraphicOverlay() {
     if (!p1 || !p2) continue
     const color = xiang.direction === 'up' ? '#ffe066' : '#ff9f7f'
     children.push({ type: 'line', shape: { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1] },
-      style: { stroke: color, lineWidth: 3.5, opacity: 0.55 }, z: 101, silent: true })
+      style: { stroke: color, lineWidth: 2, opacity: 0.38 }, z: 101, silent: true })
   }
 
   // ── 买卖点 ──────────────────────────────────────────────────────
@@ -342,11 +347,11 @@ function applyGraphicOverlay() {
     const dash = isSupport ? [6, 4] : [8, 4]
     const label = isSupport ? `撑 ${lvl.price.toFixed(2)}` : `阻 ${lvl.price.toFixed(2)}`
     const strength = lvl.strength ?? 0.5
-    const lw = 0.8 + strength * 0.8
+    const lw = 0.55 + strength * 0.45
     children.push({ type: 'line', shape: { x1: gridLeft, y1: yp, x2: gridRight, y2: yp },
-      style: { stroke: color, lineWidth: lw, opacity: 0.4 + strength * 0.35, lineDash: dash },
+      style: { stroke: color, lineWidth: lw, opacity: 0.22 + strength * 0.28, lineDash: dash },
       z: 98, silent: true })
-    children.push({ type: 'text', style: { text: label, fill: color, fontSize: 9, opacity: 0.65 },
+    children.push({ type: 'text', style: { text: label, fill: color, fontSize: 8, opacity: 0.45 + strength * 0.35 },
       x: gridLeft + 4, y: yp - 4, z: 99, silent: true })
   }
 
@@ -372,10 +377,10 @@ function applyGraphicOverlay() {
     if (idx < viewS || idx > viewE) continue
     const pt = pixelAtIdxCached(idx, props.klines[idx].close)
     if (!pt) continue
-    children.push({ type: 'circle', shape: { cx: pt[0], cy: pt[1], r: 6 },
-      style: { fill: '#ffe066', stroke: '#06080c', lineWidth: 2 }, z: 105, silent: true })
-    children.push({ type: 'text', style: { text: '共振', fill: '#ffe066', fontSize: 9, fontWeight: 700, textAlign: 'center' },
-      x: pt[0], y: pt[1] - 10, z: 106, silent: true })
+    children.push({ type: 'circle', shape: { cx: pt[0], cy: pt[1], r: 5 },
+      style: { fill: 'rgba(255,224,102,0.85)', stroke: '#06080c', lineWidth: 1.5 }, z: 105, silent: true })
+    children.push({ type: 'text', style: { text: '共振', fill: '#e6c355', fontSize: 8, fontWeight: 600, textAlign: 'center' },
+      x: pt[0], y: pt[1] - 9, z: 106, silent: true })
   }
 
   chart.setOption({
@@ -443,11 +448,11 @@ function buildOption(chartH: number = 300) {
 
   // 均线
   if (ind.ma5) seriesList.push({ name: 'MA5', type: 'line', data: lastMa5, xAxisIndex: 0, yAxisIndex: 0,
-    lineStyle: { width: 1.2, color: '#f0b429' }, symbol: 'none', smooth: false, connectNulls: true, z: 4 })
+    lineStyle: { width: 1, color: '#f0b429' }, symbol: 'none', smooth: false, connectNulls: true, z: 4 })
   if (ind.ma20) seriesList.push({ name: 'MA20', type: 'line', data: lastMa20, xAxisIndex: 0, yAxisIndex: 0,
-    lineStyle: { width: 1.2, color: '#38bdf8' }, symbol: 'none', smooth: false, connectNulls: true, z: 4 })
+    lineStyle: { width: 1, color: '#38bdf8' }, symbol: 'none', smooth: false, connectNulls: true, z: 4 })
   if (ind.ma60) seriesList.push({ name: 'MA60', type: 'line', data: lastMa60, xAxisIndex: 0, yAxisIndex: 0,
-    lineStyle: { width: 1.2, color: '#a78bfa' }, symbol: 'none', smooth: false, connectNulls: true, z: 4 })
+    lineStyle: { width: 1, color: '#a78bfa' }, symbol: 'none', smooth: false, connectNulls: true, z: 4 })
 
   // Main xAxis
   xAxes.push({ type: 'category', data: dates, gridIndex: 0, boundaryGap: true,
@@ -458,7 +463,7 @@ function buildOption(chartH: number = 300) {
 
   // Main yAxis
   yAxes.push({ scale: true, gridIndex: 0,
-    splitLine: { lineStyle: { color: GRID_COLOR, type: 'dashed' } },
+    splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)', type: 'dashed' } },
     axisLabel: { color: TEXT_COLOR, fontSize: 9 },
     axisLine: { show: false }, axisTick: { show: false } })
 
