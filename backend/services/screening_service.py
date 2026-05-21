@@ -1,12 +1,10 @@
 """
 选股服务 — 按基础指标、缠论买卖点、MACD+SKDJ 双金叉筛选股票。
 """
-import threading
+import logging
 import time
-from typing import Optional
 import pandas as pd
-import asyncio
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ThreadPoolExecutor
 
 from chanlun.elements import BuySellPoint
 from chanlun.engine import ChanlunEngine
@@ -14,10 +12,11 @@ from services.akshare_service import (
     get_kline_hist,
     get_daily_hot_stocks,
     get_realtime_quote,
-    get_stock_info,
     get_stock_boards_em,
 )
 from utils import chanlun_cache
+
+log = logging.getLogger(__name__)
 
 
 # ─── MACD / SKDJ（同前端 stockIndicators.ts 算法） ────────────────────────────
@@ -190,6 +189,7 @@ def _analyze_stock(code: str, level: str) -> dict | None:
             "dates": dates,
         }
     except Exception:
+        log.debug("单只股票选股分析失败 code=%s level=%s", code, level, exc_info=True)
         return None
 
 
@@ -249,6 +249,7 @@ def _get_quote_and_info(codes: list[str], need_industry: bool = False) -> dict[s
                 info = get_stock_boards_em(code)
                 return code, info.get("industry"), info.get("pe"), info.get("pb")
             except Exception:
+                log.debug("股票基本面获取失败 code=%s", code, exc_info=True)
                 return code, None, None, None
 
         workers = min(30, len(codes))
@@ -286,13 +287,12 @@ def screen_stocks_stream(
         type: "result"   → 选股结果 dict
         type: "done"     → None（全部完成）
     """
-    import time
     t0 = time.time()
 
     # Step 1：候选池
     hot_list = get_daily_hot_stocks(pool_size)
     t1 = time.time()
-    print(f"[选股] 候选池获取 {len(hot_list)} 只，耗时 {t1-t0:.1f}s")
+    log.info("选股候选池获取 count=%s elapsed=%.1fs", len(hot_list), t1 - t0)
     if not hot_list:
         yield {"type": "done", "total": 0}
         return
@@ -306,7 +306,7 @@ def screen_stocks_stream(
     # Step 2：行情 + 基本面
     quote_map = _get_quote_and_info(candidates, need_industry=need_industry)
     t2 = time.time()
-    print(f"[选股] 行情+基本面，耗时 {t2-t1:.1f}s")
+    log.info("选股行情和基本面完成 elapsed=%.1fs", t2 - t1)
 
     # Step 3：基础指标预过滤
     prefiltered = []
@@ -336,15 +336,17 @@ def screen_stocks_stream(
 
     yield {"type": "progress", "done": 0, "total": len(prefiltered)}
     t3 = time.time()
-    print(f"[选股] 预过滤剩余 {len(prefiltered)} 只，耗时 {t3-t2:.1f}s")
+    log.info("选股预过滤完成 remaining=%s elapsed=%.1fs", len(prefiltered), t3 - t2)
 
     # Step 4：并发缠论分析，结果随算随 yield
     WORKERS = 20
-    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        futures = {pool.submit(_analyze_stock, c, level): c for c in prefiltered}
-        done_count = 0
-        from concurrent.futures import as_completed
+    pool = ThreadPoolExecutor(max_workers=WORKERS)
+    futures = {pool.submit(_analyze_stock, c, level): c for c in prefiltered}
+    done_count = 0
+    emitted_count = 0
+    from concurrent.futures import as_completed
 
+    try:
         for future in as_completed(futures):
             code = futures[future]
             done_count += 1
@@ -352,8 +354,9 @@ def screen_stocks_stream(
                 yield {"type": "progress", "done": done_count, "total": len(prefiltered)}
 
             try:
-                analysis = future.result(timeout=30)  # 单只股票分析超时 30 秒
-            except (FuturesTimeoutError, TimeoutError):
+                analysis = future.result()
+            except Exception:
+                log.exception("选股任务执行失败 code=%s level=%s", code, level)
                 analysis = None
 
             if analysis is None:
@@ -376,6 +379,7 @@ def screen_stocks_stream(
                 sig_date_str = str(sig.datetime)[:10]
                 sig_conf = round(sig.confidence, 2)
 
+            emitted_count += 1
             yield {
                 "type": "result",
                 "data": {
@@ -396,9 +400,15 @@ def screen_stocks_stream(
                     "trend": analysis["trend"],
                 }
             }
+            if emitted_count >= max_results:
+                break
+    finally:
+        for future in futures:
+            future.cancel()
+        pool.shutdown(wait=False, cancel_futures=True)
 
     t4 = time.time()
-    print(f"[选股] 完成，缠论分析耗时 {t4-t3:.1f}s")
+    log.info("选股完成 done=%s elapsed=%.1fs", done_count, t4 - t3)
     yield {"type": "done", "total": done_count}
 
 

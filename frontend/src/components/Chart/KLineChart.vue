@@ -30,8 +30,8 @@
 
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted } from 'vue'
-import * as echarts from 'echarts'
-import type { KLine, Bi, Zhongshu, Signal, AISignal, SupportResistance } from '../../api/stock'
+import echarts from '../../utils/echarts'
+import type { KLine, Bi, XiangSegment, Zhongshu, Signal, AISignal, SupportResistance } from '../../api/stock'
 import type { IndicatorConfig } from '../../stores/chanlun'
 import { computeDualMacdSkdjMarkerIndices } from '../../utils/stockIndicators'
 import { simplifySupportResistanceLevels } from '../../utils/chartOverlayUtils'
@@ -64,13 +64,18 @@ function getIndicators(): Required<IndicatorConfig> {
 }
 
 /** buildOption 写入、renderItem 读取 —— ECharts 对 data 里的大对象不可靠，必须走闭包缓存 */
+type IndexedRange<T> = T & { _s: number; _e: number }
+type IndexedSignal = Signal & { _idx: number }
+type DataZoomOption = { startValue?: number; endValue?: number; start?: number; end?: number }
+type GraphicElement = Record<string, unknown>
+
 type ChanlunOverlayPayload = {
-  bis: any[]
-  xiangs: any[]
-  zhongshus: any[]
-  signals: any[]
+  bis: IndexedRange<Bi>[]
+  xiangs: IndexedRange<XiangSegment>[]
+  zhongshus: IndexedRange<Zhongshu>[]
+  signals: IndexedSignal[]
   aiSignal: AISignal | null | undefined
-  supportResistance: any[]
+  supportResistance: SupportResistance[]
   _n: number
 }
 let chanlunOverlayCache: ChanlunOverlayPayload | null = null
@@ -206,7 +211,7 @@ function buildOption() {
   }
 
   const legendData = ['K线']
-  const seriesList: any[] = [
+  const seriesList: Record<string, unknown>[] = [
     {
       name: 'K线', type: 'candlestick', data: ohlc,
       xAxisIndex: 0, yAxisIndex: 0, z: 3,
@@ -338,10 +343,10 @@ function applyChanlunGraphic() {
   }
 
   const { bis, xiangs, zhongshus, signals, aiSignal, supportResistance } = data
-  const children: any[] = []
+  const children: GraphicElement[] = []
   const finder = { xAxisIndex: 0, yAxisIndex: 0 } as const
 
-  const opt = (chart as any).getOption?.()
+  const opt = chart.getOption() as { dataZoom?: DataZoomOption[] }
   const dz0 = opt?.dataZoom?.[0]
   const vStart = dz0?.startValue ?? 0
   const vEnd = dz0?.endValue ?? (lastDates.length - 1)
@@ -633,7 +638,7 @@ function onChartFinished() {
 
 function onChartDataZoom() {
   queueChanlunGraphic()
-  const dz = (chart as any).getOption()?.dataZoom?.[0]
+  const dz = (chart?.getOption() as { dataZoom?: DataZoomOption[] } | undefined)?.dataZoom?.[0]
   if (dz && dz.start != null && dz.end != null) {
     emit('zoomChange', dz.start, dz.end)
   }

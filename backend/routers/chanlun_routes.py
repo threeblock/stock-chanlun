@@ -14,6 +14,7 @@ from ai.wave_classifier import WaveClassifier
 from chanlun.elements import ChanlunAnalysis
 from chanlun.engine import ChanlunEngine
 from core.chanlun_analysis import get_kline_df_for_ai, level_to_period, run_analysis
+from core.chanlun_response import serialize_chanlun_analysis
 from deps import check_chanlun_rate_limits, client_ip
 from services.akshare_service import get_kline_hist
 from utils import chanlun_cache
@@ -32,68 +33,7 @@ async def analyze_chanlun(
 ):
     check_chanlun_rate_limits(client_ip(request))
     result = await asyncio.to_thread(run_analysis, code, level)
-    return {
-        "stock_code": result.stock_code,
-        "level": result.level,
-        "trend": result.trend,
-        "summary": result.summary,
-        "bis": [
-            {
-                "id": b.id,
-                "start": str(b.start)[:19],
-                "end": str(b.end)[:19],
-                "direction": b.direction,
-                "high": b.high,
-                "low": b.low,
-            }
-            for b in result.bis
-        ],
-        "xiangs": [
-            {
-                "id": s.id,
-                "start": str(s.start)[:19],
-                "end": str(s.end)[:19],
-                "direction": s.direction,
-                "high": s.high,
-                "low": s.low,
-            }
-            for s in result.xiangs
-        ],
-        "zhongshus": [
-            {
-                "id": z.id,
-                "start": str(z.start)[:19],
-                "end": str(z.end)[:19],
-                "range_high": z.range_high,
-                "range_low": z.range_low,
-            }
-            for z in result.zhongshus
-        ],
-        "signals": [
-            {
-                "type": s.type,
-                "level": s.level,
-                "price": s.price,
-                "datetime": str(s.datetime)[:19],
-                "confidence": s.confidence,
-                "stop_loss": s.stop_loss,
-                "take_profit": s.take_profit,
-                "description": s.description,
-            }
-            for s in result.signals
-        ],
-        "supportResistance": [
-            {
-                "type": lvl.type,
-                "price": lvl.price,
-                "source": lvl.source,
-                "relatedId": lvl.related_id,
-                "datetime": str(lvl.datetime)[:19],
-                "strength": lvl.strength,
-            }
-            for lvl in result.support_resistance
-        ],
-    }
+    return serialize_chanlun_analysis(result)
 
 
 @router.get("/api/chanlun/{code}/multi-level", tags=["缠论"], summary="多级别并行缠论分析")
@@ -232,9 +172,15 @@ async def _ai_signal_impl(code: str, level: str, model: str) -> dict:
     resonance = None
     if level == "30min":
         try:
-            daily_df = get_kline_hist(code, period="daily", adjust="qfq")
-            if not daily_df.empty:
-                daily_result = ChanlunEngine(daily_df).analyze(level="daily")
+            daily_key = f"{code}:daily"
+            daily_result = chanlun_cache.get(daily_key)
+            if daily_result is None:
+                daily_df = get_kline_hist(code, period="daily", adjust="qfq")
+                if not daily_df.empty and len(daily_df) >= 20:
+                    daily_result = ChanlunEngine(daily_df.tail(500)).analyze(level="daily")
+                    daily_result.stock_code = code
+                    chanlun_cache.set(daily_key, daily_result)
+            if daily_result is not None:
                 daily_cls = WaveClassifier().classify(
                     daily_result.xiangs,
                     daily_result.zhongshus,

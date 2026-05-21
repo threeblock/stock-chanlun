@@ -136,9 +136,9 @@ function onZoomChange(s: number, e: number) {
 
 const stockCode = computed(() => route.params.code as string)
 const currentLevel = computed(() => store.currentLevel)
-const loadingAny = computed(() => store.loadingKline || store.loadingChanlun || store.loadingAI)
+const loadingAny = computed(() => store.loadingKline || store.loadingChanlun)
 const error = computed(() =>
-  store.errorKline || store.errorChanlun || store.errorAI
+  store.errorKline || store.errorChanlun
 )
 
 const levels = [

@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 from chanlun.elements import ChanlunAnalysis
 from chanlun.engine import ChanlunEngine
+from core.kline_serialize import analysis_klines_to_df
 from services.akshare_service import get_kline_hist
 from utils import chanlun_cache
 
@@ -56,6 +57,10 @@ def get_kline_df_for_ai(
     cache_key = f"{code}:{level}"
     cached_result = chanlun_cache.get(cache_key)
 
+    if cached_result is not None and cached_result.klines:
+        cached_result.stock_code = code
+        return analysis_klines_to_df(cached_result.klines), cached_result
+
     period = level_to_period(level)
     df = get_kline_hist(code, period=period, start_date=None, adjust="qfq")
 
@@ -67,10 +72,6 @@ def get_kline_df_for_ai(
 
     if len(df) > kline_limit:
         df = df.tail(kline_limit).reset_index(drop=True)
-
-    if cached_result is not None:
-        cached_result.stock_code = code
-        return df, cached_result
 
     engine = ChanlunEngine(df)
     result = engine.analyze(level=level)

@@ -96,6 +96,10 @@ export const useChanlunStore = defineStore('chanlun', () => {
     try {
       const res = await stockApi.chanlun(code, level)
       chanlunResult.value = res.data
+      if (res.data.klines?.length) {
+        klines.value = res.data.klines
+        klineUpdatedAt.value = timeNow()
+      }
       chanlunUpdatedAt.value = timeNow()
     } catch (e: unknown) {
       errorChanlun.value = e instanceof Error ? e.message : String(e)
@@ -120,11 +124,15 @@ export const useChanlunStore = defineStore('chanlun', () => {
 
   async function loadAll(code: string, level: LevelOption = 'daily', startDate?: string, endDate?: string) {
     currentLevel.value = level
+    const hasDateFilter = Boolean(startDate || endDate)
     await Promise.all([
-      fetchKline(code, level, startDate, endDate),
       fetchChanlun(code, level),
-      fetchAISignal(code, level),
+      hasDateFilter ? fetchKline(code, level, startDate, endDate) : Promise.resolve(),
     ])
+    if (!hasDateFilter && !klines.value.length && !errorChanlun.value) {
+      await fetchKline(code, level, startDate, endDate)
+    }
+    void fetchAISignal(code, level)
   }
 
   async function setAiModel(model: string, code: string) {

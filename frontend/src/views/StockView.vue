@@ -368,7 +368,7 @@ function onZoomChange(start: number, end: number) {
 const stockCode = computed(() => route.params.code as string)
 const currentLevel = computed(() => store.currentLevel)
 const loadingAny = computed(() =>
-  store.loadingKline || store.loadingChanlun || store.loadingAI
+  store.loadingKline || store.loadingChanlun
 )
 
 const loadingSteps = computed(() => [
@@ -378,7 +378,7 @@ const loadingSteps = computed(() => [
 ])
 
 const error = computed(() =>
-  store.errorKline || store.errorChanlun || store.errorAI
+  store.errorKline || store.errorChanlun
 )
 const quote = ref<Quote | null>(null)
 const stockInfo = ref<StockInfoFields | null>(null)

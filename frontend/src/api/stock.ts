@@ -288,6 +288,9 @@ export interface ChanlunResult {
   level: string
   trend: string
   summary: string
+  /** 与 /kline 同结构，缠论接口一并返回时可省一次行情请求 */
+  klines?: KLine[]
+  total?: number
   bis: Bi[]
   xiangs: XiangSegment[]
   zhongshus: Zhongshu[]
