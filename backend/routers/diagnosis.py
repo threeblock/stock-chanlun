@@ -10,6 +10,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import StreamingResponse
 
 from ai.chat_sessions import get_or_create_session
+from config import DEEPSEEK_MODEL_ID
 from core.chanlun_analysis import run_analysis
 from deps import check_ai_diagnosis_rate_limits, client_ip
 from services.akshare_service import get_stock_info, normalize_stock_code
@@ -117,7 +118,7 @@ async def ai_diagnosis(
 
                     log.info("AI诊断 DeepSeek 流式开始 session=%s", session_id)
                     body = {
-                        "model": "deepseek-chat",
+                        "model": DEEPSEEK_MODEL_ID,
                         "messages": messages,
                         "temperature": 0.4,
                         "stream": True,

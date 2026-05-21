@@ -5,6 +5,8 @@ import os
 import httpx
 from typing import Optional
 
+from config import DEEPSEEK_MODEL_ID
+
 
 class LLMClient:
     """
@@ -25,7 +27,7 @@ class LLMClient:
             raise ValueError("DEEPSEEK_API_KEY 未设置，请检查 .env 文件")
 
         body = {
-            "model": kwargs.get("model", "deepseek-chat"),
+            "model": kwargs.get("model", DEEPSEEK_MODEL_ID),
             "messages": messages,
             "temperature": kwargs.get("temperature", 0.3),
             "max_tokens": kwargs.get("max_tokens", 1024),

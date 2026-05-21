@@ -25,6 +25,10 @@ CORS_ORIGINS_RAW: str = os.environ.get("CORS_ORIGINS", "*").strip()
 # When True: disable TLS verification for patched finance HTTP (legacy Windows/proxy setups)
 FINANCE_TLS_RELAXED: bool = _truthy("FINANCE_TLS_RELAXED", default=False)
 
+# DeepSeek Chat Completions 模型 ID（诊股 SSE、策略 LLM 等）
+# https://api.deepseek.com — 当前推荐 deepseek-v4-pro
+DEEPSEEK_MODEL_ID: str = os.environ.get("DEEPSEEK_MODEL_ID", "deepseek-v4-pro").strip() or "deepseek-v4-pro"
+
 
 def cors_allow_origins() -> list[str]:
     if CORS_ORIGINS_RAW == "*":
