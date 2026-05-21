@@ -7,8 +7,6 @@ from .elements import (
     KLine, Bi, XiangSegment, Zhongshu, BuySellPoint,
     ChanlunAnalysis
 )
-from .kline_processor import KLineProcessor
-from .fenxing_detector import FenxingDetector
 from .bi_detector import BiDetector
 from .segment_detector import SegmentDetector
 from .signals import SignalDetector
@@ -43,11 +41,7 @@ class ChanlunEngine:
 
     def analyze(self, level: str = "daily") -> ChanlunAnalysis:
         """执行完整缠论分析"""
-        # 1. 分型检测
-        fx_detector = FenxingDetector(self.raw_klines)
-        fenxings = fx_detector.detect()
-
-        # 2. 笔识别
+        # 笔检测器内部已完成分型识别与包含处理，无需单独跑一遍分型
         bi_detector = BiDetector(self.raw_klines)
         bis = bi_detector.detect(min_bars=5)
 
@@ -87,18 +81,22 @@ class ChanlunEngine:
         )
 
     def _to_klines(self) -> list[KLine]:
-        rows = []
-        for _, row in self.raw_klines.iterrows():
-            rows.append(KLine(
-                date=row['date'].to_pydatetime()
-                     if hasattr(row['date'], 'to_pydatetime') else row['date'],
-                open=float(row['open']),
-                high=float(row['high']),
-                low=float(row['low']),
-                close=float(row['close']),
-                volume=float(row.get('volume', 0) or 0),
-                amount=float(row.get('amount', 0) or 0)
-            ))
+        rows: list[KLine] = []
+        for row in self.raw_klines.itertuples(index=False):
+            d = row.date
+            if hasattr(d, "to_pydatetime"):
+                d = d.to_pydatetime()
+            rows.append(
+                KLine(
+                    date=d,
+                    open=float(row.open),
+                    high=float(row.high),
+                    low=float(row.low),
+                    close=float(row.close),
+                    volume=float(getattr(row, "volume", 0) or 0),
+                    amount=float(getattr(row, "amount", 0) or 0),
+                )
+            )
         return rows
 
     def _make_summary(self, trend: str, signals: list[BuySellPoint],

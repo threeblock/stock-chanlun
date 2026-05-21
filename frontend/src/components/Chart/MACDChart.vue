@@ -4,7 +4,7 @@
 
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted } from 'vue'
-import * as echarts from 'echarts'
+import echarts from '../../utils/echarts'
 import type { KLine } from '../../api/stock'
 import { calcMACD } from '../../utils/stockIndicators'
 

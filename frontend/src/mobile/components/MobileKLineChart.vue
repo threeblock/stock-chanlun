@@ -47,7 +47,7 @@
 
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import * as echarts from 'echarts'
+import echarts from '../../utils/echarts'
 import type { KLine, Bi, XiangSegment, Zhongshu, Signal, AISignal, SupportResistance } from '@/api/stock'
 import type { IndicatorConfig } from '@/stores/chanlun'
 import { calcMACD, calcSKDJ, calcRSI, computeDualMacdSkdjMarkerIndices } from '@/utils/stockIndicators'
@@ -83,6 +83,9 @@ let touchStartY = 0
 let lastTouchX = 0
 let isScrolling = false
 let touchCount = 0
+
+type DataZoomOption = { startValue?: number; endValue?: number; start?: number; end?: number }
+type GraphicElement = Record<string, unknown>
 
 // ── 指标配置 ────────────────────────────────────────────────────────────────
 function getIndicators(): Required<IndicatorConfig> {
@@ -254,7 +257,7 @@ function applyGraphicOverlay() {
     return
   }
 
-  const opt = (chart as any).getOption?.()
+  const opt = chart.getOption() as { dataZoom?: DataZoomOption[] }
   const dz0 = opt?.dataZoom?.[0]
   const vStart = dz0?.startValue ?? 0
   const vEnd = dz0?.endValue ?? (lastDates.length - 1)
@@ -270,7 +273,7 @@ function applyGraphicOverlay() {
     return pt
   }
 
-  const children: any[] = []
+  const children: GraphicElement[] = []
   const [gridLeft, gridRight] = getGridBounds()
 
   // ── 中枢 ────────────────────────────────────────────────────────
@@ -437,10 +440,10 @@ function buildOption(chartH: number = 300) {
   const mainH = subCount > 0 ? chartHeight * 0.38 : chartHeight
 
   // grid index: 0 = main, 1..N = sub-charts
-  const grids: any[] = []
-  const xAxes: any[] = []
-  const yAxes: any[] = []
-  const seriesList: any[] = []
+  const grids: Record<string, unknown>[] = []
+  const xAxes: Record<string, unknown>[] = []
+  const yAxes: Record<string, unknown>[] = []
+  const seriesList: Record<string, unknown>[] = []
 
   // Main grid
   grids.push({ left: 8, right: 8, top: 8, bottom: subCount > 0 ? subCount * subHeight + gap * subCount + 4 : 16 })
@@ -612,7 +615,7 @@ function initChart() {
     if (idx >= 0 && idx < props.klines.length) setBarInfoByIndex(idx)
   })
   chart.on('dataZoom', () => {
-    const dz = (chart as any).getOption()?.dataZoom?.[0]
+    const dz = (chart?.getOption() as { dataZoom?: DataZoomOption[] } | undefined)?.dataZoom?.[0]
     if (dz && dz.start != null && dz.end != null) emit('zoomChange', dz.start, dz.end)
     queueGraphic()
   })

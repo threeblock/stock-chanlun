@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from core.chanlun_analysis import level_to_period
+from core.kline_serialize import df_to_kline_dicts
 from core.numbers import finite_float
 from deps import check_kline_rate_limits, client_ip
 from services.akshare_service import (
@@ -105,6 +106,7 @@ async def screen_stocks_api(
 
 @router.get("/api/stocks/screen-stream", tags=["选股"])
 def screen_stocks_stream_api(
+    request: Request,
     change_pct_min: Optional[float] = Query(None, description="最小涨跌幅（%）"),
     change_pct_max: Optional[float] = Query(None, description="最大涨跌幅（%）"),
     volume_min: Optional[float] = Query(None, description="最小成交量（手）"),
@@ -130,7 +132,7 @@ def screen_stocks_stream_api(
             signal_types = raw
 
     async def event_stream():
-        for item in screen_stocks_stream(
+        iterator = screen_stocks_stream(
             change_pct_min=change_pct_min,
             change_pct_max=change_pct_max,
             volume_min=volume_min,
@@ -143,8 +145,24 @@ def screen_stocks_stream_api(
             level=level,
             pool_size=pool_size,
             max_results=max_results,
-        ):
-            yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+        )
+
+        def _next_item():
+            try:
+                return True, next(iterator)
+            except StopIteration:
+                return False, None
+
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                ok, item = await asyncio.to_thread(_next_item)
+                if not ok:
+                    break
+                yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+        finally:
+            iterator.close()
 
     return StreamingResponse(
         event_stream(),
@@ -279,20 +297,8 @@ def _stock_kline_impl(
 
     df = df.tail(limit).reset_index(drop=True)
 
-    return {
-        "klines": [
-            {
-                "date": str(r["date"])[:19],
-                "open": float(r["open"]),
-                "high": float(r["high"]),
-                "low": float(r["low"]),
-                "close": float(r["close"]),
-                "volume": float(r.get("volume", 0) or 0),
-            }
-            for _, r in df.iterrows()
-        ],
-        "total": len(df),
-    }
+    klines = df_to_kline_dicts(df)
+    return {"klines": klines, "total": len(klines)}
 
 
 @router.get("/api/stocks/{code}/kline", tags=["数据"])

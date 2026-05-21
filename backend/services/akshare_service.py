@@ -3,6 +3,8 @@
 """
 import warnings
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
+import logging
+import threading
 import pandas as pd
 import json
 import re
@@ -14,27 +16,31 @@ import httpx
 
 from utils import with_retry
 
+log = logging.getLogger(__name__)
+
 # 创建 HTTP 客户端（带重试机制的同步客户端）
 _http_client: httpx.Client | None = None
+_http_client_lock = threading.RLock()
 
 
 def _get_client() -> httpx.Client:
     """获取或创建 HTTP 客户端（禁用代理，直连，共享连接池）"""
     global _http_client
-    if _http_client is None:
-        limits = httpx.Limits(max_keepalive_connections=10, max_connections=20)
-        _http_client = httpx.Client(
-            timeout=30.0,
-            follow_redirects=True,
-            trust_env=False,
-            limits=limits,
-            headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Referer': 'https://finance.qq.com/',
-                'Accept': '*/*',
-            }
-        )
-    return _http_client
+    with _http_client_lock:
+        if _http_client is None:
+            limits = httpx.Limits(max_keepalive_connections=10, max_connections=20)
+            _http_client = httpx.Client(
+                timeout=30.0,
+                follow_redirects=True,
+                trust_env=False,
+                limits=limits,
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Referer': 'https://finance.qq.com/',
+                    'Accept': '*/*',
+                }
+            )
+        return _http_client
 
 
 def get_stock_news(limit: int = 10) -> list:
@@ -51,24 +57,24 @@ def get_stock_news(limit: int = 10) -> list:
     news = _fetch_em_breaking_news(limit)
     if news:
         _cache_set(cache_key, news, ttl=300)
-        print(f"[新闻] 东方财富快讯获取成功，共 {len(news)} 条")
+        log.info("东方财富快讯获取成功 count=%s", len(news))
         return news
 
     # ② 同花顺行业/市场新闻
     news = _fetch_ths_news(limit)
     if news:
         _cache_set(cache_key, news, ttl=300)
-        print(f"[新闻] 同花顺获取成功，共 {len(news)} 条")
+        log.info("同花顺新闻获取成功 count=%s", len(news))
         return news
 
     # ③ 东方财富资讯列表兜底
     news = _fetch_em_article_news(limit)
     if news:
         _cache_set(cache_key, news, ttl=300)
-        print(f"[新闻] 东方财富资讯获取成功，共 {len(news)} 条")
+        log.info("东方财富资讯获取成功 count=%s", len(news))
         return news
 
-    print("[新闻] 所有来源均获取失败")
+    log.warning("新闻所有来源均获取失败")
     return []
 
 
@@ -98,8 +104,8 @@ def _fetch_em_breaking_news(limit: int) -> list:
                 "digest": "",
             })
         return news
-    except Exception as e:
-        print(f"[新闻] 东方财富快讯失败: {e}")
+    except Exception:
+        log.exception("东方财富快讯获取失败")
         return []
 
 
@@ -127,8 +133,8 @@ def _fetch_ths_news(limit: int) -> list:
                 "digest": str(item.get("summary", "") or "").strip()[:120],
             })
         return news
-    except Exception as e:
-        print(f"[新闻] 同花顺失败: {e}")
+    except Exception:
+        log.exception("同花顺新闻获取失败")
         return []
 
 
@@ -161,29 +167,36 @@ def _fetch_em_article_news(limit: int) -> list:
                 "digest": str(item.get("DocAbstract", "") or "").strip()[:120],
             })
         return news
-    except Exception as e:
-        print(f"[新闻] 东方财富资讯兜底失败: {e}")
+    except Exception:
+        log.exception("东方财富资讯兜底获取失败")
         return []
 
 
-# 简单的内存缓存
+# 简单的内存缓存（带上限，避免长时间运行无限增长）
 _cache: dict = {}
+_CACHE_MAX_ENTRIES = 512
+_cache_lock = threading.RLock()
 
 
 def _cache_get(key: str):
-    entry = _cache.get(key)
-    if entry is None:
+    with _cache_lock:
+        entry = _cache.get(key)
+        if entry is None:
+            return None
+        data, timestamp, ttl = entry
+        if datetime.now().timestamp() - timestamp < ttl:
+            return data
+        _cache.pop(key, None)
         return None
-    data, timestamp, ttl = entry
-    if datetime.now().timestamp() - timestamp < ttl:
-        return data
-    if key in _cache:
-        del _cache[key]
-    return None
 
 
 def _cache_set(key: str, data, ttl: int = 60):
-    _cache[key] = (data, datetime.now().timestamp(), ttl)
+    with _cache_lock:
+        if key not in _cache and len(_cache) >= _CACHE_MAX_ENTRIES:
+            overflow = len(_cache) - _CACHE_MAX_ENTRIES + 1
+            for old_key in list(_cache.keys())[:overflow]:
+                _cache.pop(old_key, None)
+        _cache[key] = (data, datetime.now().timestamp(), ttl)
 
 
 def normalize_stock_code(code: str) -> tuple[str, str]:
