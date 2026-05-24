@@ -4,7 +4,10 @@ import asyncio
 import csv
 import io
 import json
+import logging
 from typing import Optional
+
+log = logging.getLogger(__name__)
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -180,7 +183,7 @@ async def market_overview():
         try:
             return get_market_overview_bundle()
         except Exception as e:
-            print(f"大盘概览获取失败: {e}")
+            log.warning("大盘概览获取失败: %s", e)
             return {
                 "indices": {},
                 "market_breadth": {"advancers": 0, "decliners": 0, "unchanged": 0},
@@ -203,7 +206,7 @@ async def sector_stocks(name: str):
         try:
             return get_board_constituents_em(name)
         except Exception as e:
-            print(f"[板块] 「{name}」获取失败: {e}")
+            log.warning("板块「%s」获取失败: %s", name, e)
             return {"sector_name": name, "board_type": None, "stocks": [], "total": 0}
 
     return await asyncio.to_thread(_run)

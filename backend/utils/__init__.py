@@ -73,6 +73,9 @@ class LRUCache:
 # ── 缠论分析结果缓存（5分钟 TTL，最多缓存 256 只股票） ──────────────────────
 chanlun_cache = LRUCache(maxsize=256, ttl=300.0)
 
+# ── AI 策略信号缓存（规则版 90s，含 LLM 版 5 分钟，最多 128 条） ─────────────
+ai_signal_cache = LRUCache(maxsize=128, ttl=300.0)
+
 
 # ── HTTP 重试装饰器 ─────────────────────────────────────────────────────────
 def with_retry(
@@ -137,6 +140,30 @@ class RateLimiter:
             return identifier
         return hashlib.sha256(identifier.encode()).hexdigest()[:64]
 
+    def prune_stale_keys(self, max_keys: int = 2000) -> int:
+        """清理过期条目；键过多时丢弃最久未活动的标识。返回移除的键数量。"""
+        now = time.time()
+        cutoff = now - self._window
+        removed = 0
+        with self._lock:
+            for key in list(self._counts.keys()):
+                active = [t for t in self._counts[key] if t > cutoff]
+                if not active:
+                    del self._counts[key]
+                    removed += 1
+                else:
+                    self._counts[key] = active
+            overflow = len(self._counts) - max_keys
+            if overflow > 0:
+                ranked = sorted(
+                    self._counts.items(),
+                    key=lambda item: max(item[1]) if item[1] else 0,
+                )
+                for key, _ in ranked[:overflow]:
+                    self._counts.pop(key, None)
+                    removed += 1
+        return removed
+
     def try_acquire(self, identifier: str = "global", tokens: int = 1) -> bool:
         """尝试获取令牌，返回是否允许请求"""
         key = self._make_key(identifier)
@@ -144,6 +171,9 @@ class RateLimiter:
         cutoff = now - self._window
 
         with self._lock:
+            if len(self._counts) > 1500:
+                self.prune_stale_keys()
+
             if key not in self._counts:
                 self._counts[key] = []
 

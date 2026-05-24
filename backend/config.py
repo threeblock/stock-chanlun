@@ -29,6 +29,12 @@ FINANCE_TLS_RELAXED: bool = _truthy("FINANCE_TLS_RELAXED", default=False)
 # https://api.deepseek.com — 当前推荐 deepseek-v4-pro
 DEEPSEEK_MODEL_ID: str = os.environ.get("DEEPSEEK_MODEL_ID", "deepseek-v4-pro").strip() or "deepseek-v4-pro"
 
+# 选股缠论并发（默认 12，可通过环境变量调低以减轻行情源压力）
+SCREENING_WORKERS: int = max(1, min(32, int(os.environ.get("SCREENING_WORKERS", "12") or "12")))
+
+# 后端默认监听端口（run_server.py 与 python main.py 均读取）
+PORT: int = max(1, min(65535, int(os.environ.get("PORT", "8010") or "8010")))
+
 
 def cors_allow_origins() -> list[str]:
     if CORS_ORIGINS_RAW == "*":

@@ -19,7 +19,7 @@ from config import cors_allow_credentials, cors_allow_origins
 from routers import chanlun_routes, comments, diagnosis, stocks, system, watchlist
 from services.akshare_service import warm_hot_cache
 from stores.local_json import apply_startup_ai_model
-from utils import chanlun_cache
+from utils import ai_signal_cache, chanlun_cache
 
 
 @asynccontextmanager
@@ -27,6 +27,7 @@ async def lifespan(_app: FastAPI):
     warm_hot_cache()
     apply_startup_ai_model()
     chanlun_cache.purge_expired()
+    ai_signal_cache.purge_expired()
     yield
 
 
@@ -59,4 +60,6 @@ app.include_router(diagnosis.router)
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    from config import PORT
+
+    uvicorn.run(app, host="0.0.0.0", port=PORT)

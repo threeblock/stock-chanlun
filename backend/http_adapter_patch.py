@@ -4,9 +4,13 @@ Must be imported before any code that triggers requests to eastmoney / tencent q
 """
 from __future__ import annotations
 
+import logging
+
 import requests as _req_mod
 
 from config import FINANCE_TLS_RELAXED
+
+log = logging.getLogger(__name__)
 
 _NO_PROXY = {"http": None, "https": None}
 _EM_HOSTS = ("eastmoney", "qt.gtimg", "sinajs", "ifzq", "10jqka")
@@ -25,7 +29,7 @@ def _patched_send(adapter, request, stream=False, timeout=None, verify=True, cer
 
 
 _req_mod.adapters.HTTPAdapter.send = _patched_send
-print(
-    f"[补丁] requests: timeout=12s + 禁用代理 for finance hosts; "
-    f"FINANCE_TLS_RELAXED={FINANCE_TLS_RELAXED}"
+log.info(
+    "requests patch: timeout=12s, no proxy for finance hosts; FINANCE_TLS_RELAXED=%s",
+    FINANCE_TLS_RELAXED,
 )

@@ -318,7 +318,12 @@
       <!-- Right: AI Strategy + Notes -->
       <aside v-if="layout.rightVisible" class="sidebar-right">
         <CommentSection :stock-code="stockCode" />
-        <StrategyCard :signal="store.aiSignal" :updated-at="store.aiUpdatedAt" />
+        <StrategyCard
+          :signal="store.aiSignal"
+          :updated-at="store.aiUpdatedAt"
+          :loading="store.loadingAI"
+          @deep-analyze="onDeepAnalyze"
+        />
       </aside>
     </div>
     <AiSuspendedBallChat :stock-code="stockCode" />
@@ -329,11 +334,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { useChanlunStore, type LevelOption } from '../stores/chanlun'
-import { useCommentStore } from '../stores/comment'
+import type { LevelOption } from '../stores/chanlun'
 import { useWatchlistStore } from '../stores/watchlist'
-import { stockApi, type StockInfoFields, type StockExtras, type Quote } from '../api/stock'
+import type { StockInfoFields, StockExtras, Quote } from '../api/stock'
 import toast from '../composables/useToast'
+import { useStockPage } from '../composables/useStockPage'
 import KLineChart from '../components/Chart/KLineChart.vue'
 import VolumeChart from '../components/Chart/VolumeChart.vue'
 import MACDChart from '../components/Chart/MACDChart.vue'
@@ -346,8 +351,11 @@ import CommentSection from '../components/Signal/CommentSection.vue'
 import AiSuspendedBallChat from '../components/AiSuspendedBallChat.vue'
 
 const route = useRoute()
-const store = useChanlunStore()
-const commentStore = useCommentStore()
+const { store, quote, stockInfo, extras, loadStock, changeLevel: changeLevelBase, refreshAIStrategy } = useStockPage()
+
+async function changeLevel(level: LevelOption) {
+  await changeLevelBase(stockCode.value, level)
+}
 const watchlistStore = useWatchlistStore()
 const klineChartRef = ref<InstanceType<typeof KLineChart> | null>(null)
 
@@ -380,10 +388,6 @@ const loadingSteps = computed(() => [
 const error = computed(() =>
   store.errorKline || store.errorChanlun
 )
-const quote = ref<Quote | null>(null)
-const stockInfo = ref<StockInfoFields | null>(null)
-const extras = ref<StockExtras | null>(null)
-
 type StockViewLayout = {
   leftVisible: boolean
   rightVisible: boolean
@@ -685,30 +689,21 @@ const financeRows = computed((): InfoRow[] => {
 // 注：已移除个股页中间竖栏（盘口/板块/新闻），相关展示逻辑不再需要
 
 async function loadData() {
-  const code = stockCode.value
-  if (!code) return
-  await store.loadAll(code, currentLevel.value, startDate.value || undefined, endDate.value || undefined)
-
-  const settled = await Promise.allSettled([
-    stockApi.quote(code),
-    stockApi.info(code),
-    stockApi.extras(code, 8),
-  ])
-  if (settled[0].status === 'fulfilled') quote.value = settled[0].value.data as Quote
-  else quote.value = null
-  if (settled[1].status === 'fulfilled') {
-    const inf = settled[1].value.data.info
-    stockInfo.value = inf && Object.keys(inf).length ? inf : null
-  } else stockInfo.value = null
-  if (settled[2].status === 'fulfilled') extras.value = settled[2].value.data
-  else extras.value = null
-
-  // 加载评论笔记
-  commentStore.fetchComments(code)
+  await loadStock(
+    stockCode.value,
+    currentLevel.value,
+    startDate.value || undefined,
+    endDate.value || undefined,
+  )
 }
 
-async function changeLevel(level: LevelOption) {
-  await store.loadAll(stockCode.value, level)
+async function onDeepAnalyze() {
+  try {
+    await refreshAIStrategy(stockCode.value, { useLlm: true })
+    toast.success('LLM 深度分析已完成')
+  } catch (e: unknown) {
+    toast.error(e instanceof Error ? e.message : '深度分析失败')
+  }
 }
 
 async function toggleWatch() {
@@ -731,8 +726,12 @@ async function toggleWatch() {
 
 async function switchModel(model: string) {
   if (model === store.aiModel) return
-  await store.setAiModel(model, stockCode.value)
-  await store.loadAll(stockCode.value, store.currentLevel)
+  try {
+    await store.setAiModel(model, stockCode.value)
+    toast.success('已切换模型并完成 LLM 分析')
+  } catch (e: unknown) {
+    toast.error(e instanceof Error ? e.message : '模型切换失败')
+  }
 }
 
 function formatVolume(v?: number) {

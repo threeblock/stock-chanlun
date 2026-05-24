@@ -378,8 +378,10 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { stockApi, type HotStock, type MarketOverview, type NewsItem } from '../api/stock'
+import { stockApi } from '../api/stock'
 import toast from '../composables/useToast'
+import { useHomeDashboard, formatNewsTime } from '../composables/useHomeDashboard'
+import { useVisibilityRefresh } from '../composables/useVisibilityRefresh'
 
 const AUTO_REFRESH_INTERVAL = 5 * 60 * 1000 // 5 minutes
 
@@ -501,17 +503,23 @@ function goSector(name: string) {
   router.push(`/sector/${encodeURIComponent(name)}`)
 }
 
-// ── 大盘数据 ──
-const emptyOverview = (): MarketOverview => ({
-  indices: {},
-  market_breadth: { advancers: 0, decliners: 0, unchanged: 0 },
-  sectors: [],
-  sectors_top: [],
-  sectors_bottom: [],
-})
-const marketData = ref<MarketOverview>(emptyOverview())
-const marketLoading = ref(true)
-const marketError = ref('')
+const {
+  marketData,
+  marketLoading,
+  marketError,
+  hotStocks,
+  hotLoading,
+  hotError,
+  newsList,
+  newsLoading,
+  newsError,
+  fetchHot,
+  fetchMarket,
+  fetchNews,
+  refreshAll,
+} = useHomeDashboard(20, 8)
+
+const formatTime = formatNewsTime
 
 const sectorTopList = computed(() => marketData.value.sectors_top ?? [])
 const sectorBottomList = computed(() => marketData.value.sectors_bottom ?? [])
@@ -526,69 +534,6 @@ function sectorPillClass(pct: number) {
   return pct > 0 ? 'pill-up' : pct < 0 ? 'pill-down' : 'pill-flat'
 }
 
-// ── 热门股 ──
-const hotStocks = ref<HotStock[]>([])
-const hotLoading = ref(true)
-const hotError = ref('')
-
-// ── 新闻 ──
-const newsList = ref<NewsItem[]>([])
-const newsLoading = ref(true)
-const newsError = ref('')
-
-function formatTime(t: string): string {
-  if (!t) return ''
-  try {
-    const d = new Date(t)
-    if (isNaN(d.getTime())) return t
-    const mm = String(d.getMonth() + 1).padStart(2, '0')
-    const dd = String(d.getDate()).padStart(2, '0')
-    const hh = String(d.getHours()).padStart(2, '0')
-    const mi = String(d.getMinutes()).padStart(2, '0')
-    return `${mm}-${dd} ${hh}:${mi}`
-  } catch {
-    return t
-  }
-}
-
-async function fetchHot() {
-  hotLoading.value = true
-  hotError.value = ''
-  try {
-    const res = await stockApi.hotStocks(20)
-    if (res.data.error) { hotError.value = res.data.error; hotStocks.value = [] }
-    else hotStocks.value = res.data.stocks ?? []
-  } catch { hotError.value = '热门股票获取失败'; hotStocks.value = [] }
-  finally { hotLoading.value = false }
-}
-
-async function fetchMarket() {
-  marketLoading.value = true
-  marketError.value = ''
-  try {
-    const res = await stockApi.marketOverview()
-    const d = res.data
-    marketData.value = {
-      indices: d.indices ?? {},
-      market_breadth: d.market_breadth ?? { advancers: 0, decliners: 0, unchanged: 0 },
-      sectors: d.sectors ?? [],
-      sectors_top: d.sectors_top ?? [],
-      sectors_bottom: d.sectors_bottom ?? [],
-    }
-  } catch { marketError.value = '大盘数据获取失败'; marketData.value = emptyOverview() }
-  finally { marketLoading.value = false }
-}
-
-async function fetchNews() {
-  newsLoading.value = true
-  newsError.value = ''
-  try {
-    const res = await stockApi.news(8)
-    newsList.value = res.data.items ?? []
-  } catch { newsError.value = '新闻获取失败' }
-  finally { newsLoading.value = false }
-}
-
 function handleGlobalKey(e: KeyboardEvent) {
   // 忽略输入框中按 / 的情况
   if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'TEXTAREA') {
@@ -601,27 +546,14 @@ function handleGlobalKey(e: KeyboardEvent) {
   }
 }
 
-let refreshTimer: ReturnType<typeof setInterval> | null = null
-
-function startAutoRefresh() {
-  if (refreshTimer) clearInterval(refreshTimer)
-  refreshTimer = setInterval(async () => {
-    await Promise.allSettled([fetchHot(), fetchMarket(), fetchNews()])
-  }, AUTO_REFRESH_INTERVAL)
-}
-
-function stopAutoRefresh() {
-  if (refreshTimer) {
-    clearInterval(refreshTimer)
-    refreshTimer = null
-  }
-}
+const { stop: stopAutoRefresh } = useVisibilityRefresh(
+  () => refreshAll(),
+  AUTO_REFRESH_INTERVAL,
+)
 
 onMounted(async () => {
-  await Promise.allSettled([fetchHot(), fetchMarket(), fetchNews()])
-  // 全局快捷键：按 / 聚焦搜索框
+  await refreshAll()
   window.addEventListener('keydown', handleGlobalKey)
-  startAutoRefresh()
 })
 
 onUnmounted(() => {

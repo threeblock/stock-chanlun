@@ -108,11 +108,17 @@ export const useChanlunStore = defineStore('chanlun', () => {
     }
   }
 
-  async function fetchAISignal(code: string, level: LevelOption = 'daily') {
+  async function fetchAISignal(
+    code: string,
+    level: LevelOption = 'daily',
+    options?: { useLlm?: boolean },
+  ) {
     loadingAI.value = true
     errorAI.value = null
     try {
-      const res = await stockApi.aiSignal(code, level, aiModel.value)
+      const res = await stockApi.aiSignal(code, level, aiModel.value, {
+        useLlm: options?.useLlm ?? false,
+      })
       aiSignal.value = res.data
       aiUpdatedAt.value = timeNow()
     } catch (e: unknown) {
@@ -125,20 +131,24 @@ export const useChanlunStore = defineStore('chanlun', () => {
   async function loadAll(code: string, level: LevelOption = 'daily', startDate?: string, endDate?: string) {
     currentLevel.value = level
     const hasDateFilter = Boolean(startDate || endDate)
-    await Promise.all([
-      fetchChanlun(code, level),
-      hasDateFilter ? fetchKline(code, level, startDate, endDate) : Promise.resolve(),
-    ])
-    if (!hasDateFilter && !klines.value.length && !errorChanlun.value) {
-      await fetchKline(code, level, startDate, endDate)
+    if (hasDateFilter) {
+      await Promise.all([
+        fetchChanlun(code, level),
+        fetchKline(code, level, startDate, endDate),
+      ])
+    } else {
+      await fetchChanlun(code, level)
+      if (!klines.value.length && !errorChanlun.value) {
+        await fetchKline(code, level, startDate, endDate)
+      }
     }
-    void fetchAISignal(code, level)
+    void fetchAISignal(code, level, { useLlm: false })
   }
 
   async function setAiModel(model: string, code: string) {
     aiModel.value = model
     await stockApi.setAiModel(model)
-    await fetchAISignal(code, currentLevel.value)
+    await fetchAISignal(code, currentLevel.value, { useLlm: true })
   }
 
   function toggleIndicator(key: keyof IndicatorConfig) {
