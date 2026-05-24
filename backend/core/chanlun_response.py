@@ -32,6 +32,8 @@ def serialize_chanlun_analysis(result: ChanlunAnalysis) -> dict:
                 "direction": b.direction,
                 "high": b.high,
                 "low": b.low,
+                "start_price": b.start_price,
+                "end_price": b.end_price,
             }
             for b in result.bis
         ],
@@ -43,6 +45,8 @@ def serialize_chanlun_analysis(result: ChanlunAnalysis) -> dict:
                 "direction": s.direction,
                 "high": s.high,
                 "low": s.low,
+                "start_price": s.start_price,
+                "end_price": s.end_price,
             }
             for s in result.xiangs
         ],

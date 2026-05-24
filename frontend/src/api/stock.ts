@@ -99,6 +99,8 @@ export interface Bi {
   direction: 'up' | 'down'
   high: number
   low: number
+  start_price?: number
+  end_price?: number
 }
 
 export interface XiangSegment {
@@ -108,6 +110,8 @@ export interface XiangSegment {
   direction: 'up' | 'down'
   high: number
   low: number
+  start_price?: number
+  end_price?: number
 }
 
 export interface Zhongshu {

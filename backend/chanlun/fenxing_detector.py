@@ -1,15 +1,16 @@
-"""
-分型检测器 — 顶分型 & 底分型识别
-"""
-import pandas as pd
+"""Fenxing detector: top and bottom fractals after inclusion processing."""
+
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
+import pandas as pd
+
 
 @dataclass
 class Fenxing:
-    """分型"""
+    """A top or bottom fractal."""
+
     date: datetime
     type: Literal["top", "bottom"]
     high: float
@@ -19,80 +20,61 @@ class Fenxing:
 
 class FenxingDetector:
     """
-    顶分型: 中间K线高点最高、低点也最高 → 顶
-    底分型: 中间K线高点最低、低点也最低 → 底
+    Detect Chanlun fenxing.
+
+    The detector first removes containing K-line relationships. In an upward
+    merge, keep the higher high and higher low; in a downward merge, keep the
+    lower high and lower low. This preserves the effective swing shape used by
+    later bi detection.
     """
 
     def __init__(self, klines: pd.DataFrame):
-        """
-        klines: DataFrame, sorted by date, columns: date/open/high/low/close/volume
-        """
         self.klines = klines.reset_index(drop=True)
         self._process_inclusion()
 
     def _process_inclusion(self):
-        """
-        处理包含关系（单次遍历，缠论规则）：
-        - 两K线包含：prev 和 cur 任一完全包含另一根
-        - 合并方向由两根K线的相对位置决定（不是由单根自身阴阳决定）：
-            如果 prev 的最高点 ≤ cur 的最低点 → 向上关系 → 取高高（保留最高高点，合并高低点取高）
-            否则（prev 的最低点 ≥ cur 的最高点）→ 向下关系 → 取低低（保留最低低点，合并高低点取低）
-
-        包含判断：
-        - prev 包含 cur: prev.low <= cur.low AND prev.high >= cur.high
-        - cur  包含 prev: cur.low  <= prev.low AND cur.high  >= prev.high
-        """
+        """Process containing K-lines before fenxing detection."""
         rows = self.klines.to_dict("records")
+        if not rows:
+            self.klines = pd.DataFrame(rows)
+            return
+
         result = [rows[0]]
 
+        def merge_direction(prev: dict, cur: dict) -> str:
+            if len(result) >= 2:
+                before = result[-2]
+                if prev["high"] >= before["high"] and prev["low"] >= before["low"]:
+                    return "up"
+                if prev["high"] <= before["high"] and prev["low"] <= before["low"]:
+                    return "down"
+            return "up" if cur["high"] >= prev["high"] and cur["low"] >= prev["low"] else "down"
+
+        def merge_bar(prev: dict, cur: dict, keep_date, direction: str) -> dict:
+            if direction == "up":
+                high = max(prev["high"], cur["high"])
+                low = max(prev["low"], cur["low"])
+            else:
+                high = min(prev["high"], cur["high"])
+                low = min(prev["low"], cur["low"])
+
+            return {
+                "date": keep_date,
+                "open": prev["open"],
+                "high": high,
+                "low": low,
+                "close": cur["close"],
+                "volume": prev.get("volume", 0) + cur.get("volume", 0),
+            }
+
         for i in range(1, len(rows)):
-            cur  = rows[i]
+            cur = rows[i]
             prev = result[-1]
 
-            # prev 包含 cur
             if prev["low"] <= cur["low"] and prev["high"] >= cur["high"]:
-                if prev["high"] <= cur["low"]:
-                    # 向上关系：prev 在 cur 下方 → 取高高
-                    result[-1] = {
-                        "date": prev["date"],
-                        "open":  prev["open"],
-                        "high":  max(prev["high"], cur["high"]),
-                        "low":   max(prev["low"],  cur["low"]),
-                        "close": cur["close"],
-                        "volume": prev.get("volume", 0) + cur.get("volume", 0),
-                    }
-                else:
-                    # 向下关系：prev 在 cur 上方 → 取低低
-                    result[-1] = {
-                        "date": prev["date"],
-                        "open":  prev["open"],
-                        "high":  max(prev["high"], cur["high"]),
-                        "low":   min(prev["low"],  cur["low"]),
-                        "close": cur["close"],
-                        "volume": prev.get("volume", 0) + cur.get("volume", 0),
-                    }
-            # cur 包含 prev
+                result[-1] = merge_bar(prev, cur, prev["date"], merge_direction(prev, cur))
             elif cur["low"] <= prev["low"] and cur["high"] >= prev["high"]:
-                if prev["high"] <= cur["low"]:
-                    # 向上关系
-                    result[-1] = {
-                        "date": cur["date"],
-                        "open":  prev["open"],
-                        "high":  max(prev["high"], cur["high"]),
-                        "low":   max(prev["low"],  cur["low"]),
-                        "close": cur["close"],
-                        "volume": prev.get("volume", 0) + cur.get("volume", 0),
-                    }
-                else:
-                    # 向下关系
-                    result[-1] = {
-                        "date": cur["date"],
-                        "open":  prev["open"],
-                        "high":  max(prev["high"], cur["high"]),
-                        "low":   min(prev["low"],  cur["low"]),
-                        "close": cur["close"],
-                        "volume": prev.get("volume", 0) + cur.get("volume", 0),
-                    }
+                result[-1] = merge_bar(prev, cur, cur["date"], merge_direction(prev, cur))
             else:
                 result.append(cur)
 
@@ -100,10 +82,10 @@ class FenxingDetector:
 
     def detect(self) -> list[Fenxing]:
         """
-        识别所有分型（标准五笔窗口）：
-        顶分型 = 中间K线高点 > 左1 且 > 右1，且低点 > 左1 且 > 右1
-        底分型 = 中间K线高点 < 左1 且 < 右1，且低点 < 左1 且 < 右1
-        窗口取前后各1根（共3根），严格对应缠论标准定义。
+        Detect strict three-bar fractals.
+
+        Top: middle high and low are both higher than neighbours.
+        Bottom: middle high and low are both lower than neighbours.
         """
         df = self.klines
         fenxings = []
@@ -113,27 +95,37 @@ class FenxingDetector:
             middle = df.iloc[i]
             next_ = df.iloc[i + 1]
 
-            mid_h, mid_l = middle['high'], middle['low']
+            mid_h, mid_l = middle["high"], middle["low"]
 
-            # 顶分型：中间K线"高"最高、"低"也最高（∧形）
-            if (mid_h > prev['high'] and mid_h > next_['high'] and
-                    mid_l > prev['low'] and mid_l > next_['low']):
-                fenxings.append(Fenxing(
-                    date=middle['date'],
-                    type="top",
-                    high=float(mid_h),
-                    low=float(mid_l),
-                    index=i
-                ))
-            # 底分型：中间K线"高"最低、"低"也最低（∨形）
-            elif (mid_h < prev['high'] and mid_h < next_['high'] and
-                  mid_l < prev['low'] and mid_l < next_['low']):
-                fenxings.append(Fenxing(
-                    date=middle['date'],
-                    type="bottom",
-                    high=float(mid_h),
-                    low=float(mid_l),
-                    index=i
-                ))
+            if (
+                mid_h > prev["high"]
+                and mid_h > next_["high"]
+                and mid_l > prev["low"]
+                and mid_l > next_["low"]
+            ):
+                fenxings.append(
+                    Fenxing(
+                        date=middle["date"],
+                        type="top",
+                        high=float(mid_h),
+                        low=float(mid_l),
+                        index=i,
+                    )
+                )
+            elif (
+                mid_h < prev["high"]
+                and mid_h < next_["high"]
+                and mid_l < prev["low"]
+                and mid_l < next_["low"]
+            ):
+                fenxings.append(
+                    Fenxing(
+                        date=middle["date"],
+                        type="bottom",
+                        high=float(mid_h),
+                        low=float(mid_l),
+                        index=i,
+                    )
+                )
 
         return fenxings

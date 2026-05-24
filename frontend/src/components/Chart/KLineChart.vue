@@ -41,7 +41,7 @@ const props = defineProps<{
   bis: Bi[]
   zhongshus: Zhongshu[]
   signals: Signal[]
-  xiangs?: { id: string; start: string; end: string; direction: 'up' | 'down'; high: number; low: number }[]
+  xiangs?: XiangSegment[]
   aiSignal?: AISignal | null
   supportResistance?: SupportResistance[]
   indicators?: IndicatorConfig
@@ -419,8 +419,8 @@ function applyChanlunGraphic() {
   for (const bi of bis) {
     if (bi._e < viewS || bi._s > viewE) continue
     if (bi._e < bi._s) continue
-    const p1 = pixelAtIdxCached(bi._s, bi.direction === 'up' ? bi.low : bi.high)
-    const p2 = pixelAtIdxCached(bi._e, bi.direction === 'up' ? bi.high : bi.low)
+    const p1 = pixelAtIdxCached(bi._s, bi.start_price ?? (bi.direction === 'up' ? bi.low : bi.high))
+    const p2 = pixelAtIdxCached(bi._e, bi.end_price ?? (bi.direction === 'up' ? bi.high : bi.low))
     if (!p1 || !p2) continue
     const color = bi.direction === 'up' ? '#f85149' : '#3fb950'
     children.push({
@@ -455,11 +455,11 @@ function applyChanlunGraphic() {
     if (xiang._e < xiang._s) continue
     const p1 = pixelAtIdxCached(
       xiang._s,
-      xiang.direction === 'up' ? xiang.low : xiang.high
+      xiang.start_price ?? (xiang.direction === 'up' ? xiang.low : xiang.high)
     )
     const p2 = pixelAtIdxCached(
       xiang._e,
-      xiang.direction === 'up' ? xiang.high : xiang.low
+      xiang.end_price ?? (xiang.direction === 'up' ? xiang.high : xiang.low)
     )
     if (!p1 || !p2) continue
     const color = xiang.direction === 'up' ? '#ffe066' : '#ff9f7f'
@@ -684,6 +684,8 @@ function updateChart() {
  * bis/xiangs/zhongshus/signals/aiSignal/supportResistance 变化时调用。
  */
 function updateOverlayOnly() {
+  if (!chart) return
+  chart.setOption(buildOption(), { replaceMerge: ['graphic'] })
   queueChanlunGraphic()
 }
 
