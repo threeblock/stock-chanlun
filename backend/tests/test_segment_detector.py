@@ -70,6 +70,8 @@ class SegmentDetectorTests(unittest.TestCase):
         self.assertEqual(seg.end, bis[3].end)
         self.assertAlmostEqual(seg.high, 12.8)
         self.assertAlmostEqual(seg.low, 9.2)
+        self.assertAlmostEqual(seg.start_price, bis[0].start_price)
+        self.assertAlmostEqual(seg.end_price, bis[3].end_price)
 
     def test_detect_zhongshus_creates_one_from_three_overlapping_segments(self):
         segments = [

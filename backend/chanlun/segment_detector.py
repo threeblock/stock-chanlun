@@ -43,6 +43,8 @@ class SegmentDetector:
                 direction = group[0].direction
                 high = max(b.high for b in group)
                 low = min(b.low for b in group)
+                start_price = group[0].start_price
+                end_price = group[-1].end_price
                 bi_ids = [b.id for b in group]
 
                 # 尝试延伸
@@ -61,6 +63,7 @@ class SegmentDetector:
                                 low = min(low, next_b.low)
                                 bi_ids.append(next_b.id)
                                 end = next_b.end
+                                end_price = next_b.end_price
                                 extended = True
 
                 segments.append(XiangSegment(
@@ -70,6 +73,8 @@ class SegmentDetector:
                     direction=direction,
                     high=high,
                     low=low,
+                    start_price=start_price,
+                    end_price=end_price,
                     bi_ids=bi_ids,
                     level=2
                 ))

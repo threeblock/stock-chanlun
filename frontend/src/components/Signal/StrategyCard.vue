@@ -4,15 +4,31 @@
       <span class="card-title">AI 策略建议</span>
       <div class="header-right">
         <span v-if="updatedAt" class="card-time">{{ updatedAt }}</span>
+        <button
+          v-if="showDeepButton"
+          type="button"
+          class="btn-deep"
+          :disabled="loading"
+          @click="$emit('deepAnalyze')"
+        >
+          {{ loading ? '分析中…' : 'LLM 深度分析' }}
+        </button>
         <span v-if="signal" class="risk-badge" :class="riskClass">{{ signal.risk_level }}风险</span>
       </div>
     </div>
 
-    <div v-if="!signal" class="empty-strategy">
+    <div v-if="!signal && loading" class="empty-strategy">
+      <div class="skeleton" style="height: 100px; border-radius: 8px;" />
+      <p class="hint-loading">正在生成策略…</p>
+    </div>
+
+    <div v-else-if="!signal" class="empty-strategy">
       <div class="skeleton" style="height: 100px; border-radius: 8px;" />
     </div>
 
     <div v-else class="strategy-content">
+      <p v-if="isRuleOnly" class="rule-hint">当前为规则引擎结果，可点击「LLM 深度分析」获取大模型解读。</p>
+
       <!-- Direction -->
       <div class="direction-block" :class="dirClass">
         <div class="direction-main">
@@ -88,7 +104,23 @@
 import { computed } from 'vue'
 import type { AISignal } from '../../api/stock'
 
-const props = defineProps<{ signal: AISignal | null; updatedAt?: string | null }>()
+const props = defineProps<{
+  signal: AISignal | null
+  updatedAt?: string | null
+  loading?: boolean
+}>()
+
+defineEmits<{
+  deepAnalyze: []
+}>()
+
+const isRuleOnly = computed(
+  () => props.signal?.llm?.skipped === true || (props.signal != null && props.signal.llm?.used === false),
+)
+
+const showDeepButton = computed(
+  () => isRuleOnly.value && !props.loading,
+)
 
 const dirClass = computed(() => {
   if (!props.signal) return ''
@@ -120,9 +152,20 @@ function confColor(c: number) {
 
 <style scoped>
 .strategy-card { padding: 14px; }
-.card-header { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-.header-right { display: flex; align-items: center; gap: 6px; }
+.card-header { display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap; }
+.header-right { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .card-time { font-size: 0.65rem; color: var(--text-muted); font-family: var(--font-mono); }
+
+.btn-deep {
+  font-size: 0.68rem;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--accent-blue);
+  background: rgba(88, 166, 255, 0.1);
+  color: var(--accent-blue);
+  cursor: pointer;
+}
+.btn-deep:disabled { opacity: 0.6; cursor: not-allowed; }
 
 .risk-badge {
   font-size: 0.7rem;
@@ -135,6 +178,13 @@ function confColor(c: number) {
 .risk-high { background: rgba(248,81,73,0.15); color: var(--accent-red); }
 
 .empty-strategy { padding: 8px 0; }
+.hint-loading { font-size: 0.75rem; color: var(--text-muted); margin-top: 8px; text-align: center; }
+.rule-hint {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  margin: 0 0 8px;
+  line-height: 1.5;
+}
 
 .strategy-content { display: flex; flex-direction: column; gap: 12px; }
 

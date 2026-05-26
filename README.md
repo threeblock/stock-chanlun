@@ -486,7 +486,7 @@ GET  /api/sector/{name}/stocks               板块成分股（行业/概念）
 
 ```
 GET  /api/chanlun/{code}?level=              缠论完整分析（结构+买卖点+支撑阻力）
-GET  /api/chanlun/{code}/ai?level=&model=   AI 策略信号（背驰+走势+LLM）
+GET  /api/chanlun/{code}/ai?level=&model=&use_llm=   AI 策略（默认仅规则；use_llm=true 时调用 LLM）
 ```
 
 ### AI 诊股对话（流式 SSE）
@@ -598,6 +598,8 @@ GET  /health                                 健康检查
 | `GEMINI_API_KEY` | 否 | Gemini API Key |
 | `CORS_ORIGINS` | 否 | 逗号分隔的允许来源；默认 `*`（与 `allow_credentials` 组合符合浏览器规则） |
 | `FINANCE_TLS_RELAXED` | 否 | 设为 `1`/`true` 时对部分金融站点请求放宽 TLS 校验（默认关闭，优先安全） |
+| `PORT` | 否 | 后端监听端口，默认 `8010`（`run_server.py` 与 `python main.py` 均读取） |
+| `SCREENING_WORKERS` | 否 | 选股缠论并发线程数，默认 `12` |
 
 ### 限流说明（后端）
 

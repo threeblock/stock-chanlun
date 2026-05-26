@@ -99,6 +99,8 @@ export interface Bi {
   direction: 'up' | 'down'
   high: number
   low: number
+  start_price?: number
+  end_price?: number
 }
 
 export interface XiangSegment {
@@ -108,6 +110,8 @@ export interface XiangSegment {
   direction: 'up' | 'down'
   high: number
   low: number
+  start_price?: number
+  end_price?: number
 }
 
 export interface Zhongshu {
@@ -316,6 +320,7 @@ export interface AISignal {
     model: string
     used: boolean
     error?: string
+    skipped?: boolean
   }
 }
 
@@ -393,11 +398,16 @@ export const stockApi = {
     )
   },
 
-  aiSignal(code: string, level: string, model = 'deepseek') {
-    return api.get<AISignal>(
-      `/chanlun/${code}/ai?level=${level}&model=${model}`,
-      { timeout: 120000 }
-    )
+  aiSignal(
+    code: string,
+    level: string,
+    model = 'deepseek',
+    options?: { useLlm?: boolean },
+  ) {
+    const params = new URLSearchParams({ level, model })
+    if (options?.useLlm) params.set('use_llm', 'true')
+    const timeout = options?.useLlm ? 120000 : 45000
+    return api.get<AISignal>(`/chanlun/${code}/ai?${params.toString()}`, { timeout })
   },
 
   /** 多级别并行缠论分析 */

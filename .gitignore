@@ -318,6 +318,9 @@ $RECYCLE.BIN/
 .nfs*
 
 # ============================================
+# Embedded local Python runtime (do not commit)
+.runtime/
+
 # Project Specific
 # ============================================
 # Claude Code / local agent skills (project-scoped)

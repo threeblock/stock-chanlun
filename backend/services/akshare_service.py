@@ -277,7 +277,7 @@ def get_realtime_quote(codes: list[str]) -> pd.DataFrame:
                     continue
             return records
         except Exception as e:
-            print(f"[行情] 批次拉取失败: {e}")
+            log.warning(f"[行情] 批次拉取失败: {e}")
             return []
 
     # 并发分批
@@ -394,7 +394,7 @@ def get_kline_hist(
             _cache_set(cache_key, df, ttl=30 if period in minute_periods else 300)
         return df
     except Exception as e:
-        print(f"K线获取失败 {code} {period}: {e}")
+        log.warning(f"K线获取失败 {code} {period}: {e}")
         return pd.DataFrame()
 
 
@@ -438,7 +438,7 @@ def get_index_quote(index_code: str = "000001") -> dict:
                 return result
         return {}
     except Exception as e:
-        print(f"指数行情获取失败: {e}")
+        log.warning(f"指数行情获取失败: {e}")
         return {}
 
 
@@ -481,7 +481,7 @@ def get_a_share_market_breadth() -> dict:
         _cache_set(cache_key, result, ttl=60)
         return result
 
-    print("[涨跌家数] 所有来源均失败")
+    log.warning("[涨跌家数] 所有来源均失败")
     return {"advancers": 0, "decliners": 0, "unchanged": 0}
 
 
@@ -517,7 +517,7 @@ def _em_clist_request(params: dict, *, timeout: float = 25.0) -> dict | None:
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
-            print(f"[EM clist] {base} 失败: {e}")
+            log.warning(f"[EM clist] {base} 失败: {e}")
     return None
 
 
@@ -572,12 +572,12 @@ def _fetch_em_breadth_via_clist() -> dict | None:
             page += 1
 
         total = adv + dec + flat
-        print(f"[涨跌家数] EM clist: 涨 {adv} 跌 {dec} 平 {flat} 合计 {total} (预期约 {total_expected})")
+        log.debug(f"[涨跌家数] EM clist: 涨 {adv} 跌 {dec} 平 {flat} 合计 {total} (预期约 {total_expected})")
         if total <= 0:
             return None
         return {"advancers": adv, "decliners": dec, "unchanged": flat}
     except Exception as e:
-        print(f"[涨跌家数] EM clist 失败: {e}")
+        log.warning(f"[涨跌家数] EM clist 失败: {e}")
         return None
 
 
@@ -614,12 +614,12 @@ def _fetch_sina_breadth_paginated() -> dict | None:
                 break
             page += 1
         total = adv + dec + flat
-        print(f"[涨跌家数] 新浪分页: 涨 {adv} 跌 {dec} 平 {flat} 合计 {total}")
+        log.debug(f"[涨跌家数] 新浪分页: 涨 {adv} 跌 {dec} 平 {flat} 合计 {total}")
         if total <= 0:
             return None
         return {"advancers": adv, "decliners": dec, "unchanged": flat}
     except Exception as e:
-        print(f"[涨跌家数] 新浪分页失败: {e}")
+        log.warning(f"[涨跌家数] 新浪分页失败: {e}")
         return None
 
 
@@ -638,17 +638,17 @@ def get_all_industry_boards() -> list[dict]:
     boards = _fetch_em_industry_boards()
     if boards:
         _cache_set(cache_key, boards, ttl=120)
-        print(f"[行业板块] 东方财富获取成功，共 {len(boards)} 个")
+        log.info(f"[行业板块] 东方财富获取成功，共 {len(boards)} 个")
         return boards
 
     # ② 概念板块兜底
     boards = _fetch_em_concept_boards()
     if boards:
         _cache_set(cache_key, boards, ttl=120)
-        print(f"[行业板块] 概念板块兜底成功，共 {len(boards)} 个")
+        log.info(f"[行业板块] 概念板块兜底成功，共 {len(boards)} 个")
         return boards
 
-    print("[行业板块] 所有来源均失败")
+    log.warning("[行业板块] 所有来源均失败")
     return []
 
 
@@ -688,7 +688,7 @@ def _fetch_em_industry_boards() -> list[dict]:
         rows.sort(key=lambda x: x[1], reverse=True)
         return [{"name": n, "change_pct": round(p, 2)} for n, p in rows]
     except Exception as e:
-        print(f"[行业板块] 东方财富行业失败: {e}")
+        log.warning(f"[行业板块] 东方财富行业失败: {e}")
         return []
 
 
@@ -728,7 +728,7 @@ def _fetch_em_concept_boards() -> list[dict]:
         rows.sort(key=lambda x: x[1], reverse=True)
         return [{"name": n, "change_pct": round(p, 2)} for n, p in rows]
     except Exception as e:
-        print(f"[行业板块] 概念板块兜底失败: {e}")
+        log.warning(f"[行业板块] 概念板块兜底失败: {e}")
         return []
 
 
@@ -771,7 +771,7 @@ def _em_request(url: str, params: dict, *, timeout: float = 25.0) -> dict | None
             import json
             return json.loads(text)
         except Exception as e:
-            print(f"[EM] {base}{url} 失败: {e}")
+            log.warning(f"[EM] {base}{url} 失败: {e}")
     return None
 
 
@@ -817,7 +817,7 @@ def _load_industry_name_map() -> None:
             break
         page += 1
     _INDUSTRY_MAP_LOADED = True
-    print(f"[板块] 行业名称映射加载完毕，共 {len(_EM_INDUSTRY_NAME_MAP)} 条（total={total}）")
+    log.info(f"[板块] 行业名称映射加载完毕，共 {len(_EM_INDUSTRY_NAME_MAP)} 条（total={total}）")
 
 
 _EM_CONCEPT_NAME_MAP: dict[str, str] = {}
@@ -864,7 +864,7 @@ def _load_concept_name_map() -> None:
             break  # 全部拉完
         page += 1
     _CONCEPT_MAP_LOADED = True
-    print(f"[板块] 概念名称映射加载完毕，共 {len(_EM_CONCEPT_NAME_MAP)} 条（total={total}）")
+    log.info(f"[板块] 概念名称映射加载完毕，共 {len(_EM_CONCEPT_NAME_MAP)} 条（total={total}）")
 
 
 def _finite_num(v, default: float = 0.0) -> float:
@@ -962,9 +962,9 @@ def get_board_constituents_em(board_name: str) -> dict:
         for k, v in _EM_INDUSTRY_NAME_MAP.items():
             if name in k or k in name:
                 board_code = v
-                print(f"[板块] 精确匹配失败，模糊匹配: {name!r} → {k!r} ({v})")
+                log.warning(f"[板块] 精确匹配失败，模糊匹配: {name!r} → {k!r} ({v})")
                 break
-    print(f"[板块] 查找行业: name={name!r}, found={board_code}, total_keys={len(_EM_INDUSTRY_NAME_MAP)}, sample_keys={list(_EM_INDUSTRY_NAME_MAP.keys())[:5]}")
+    log.debug(f"[板块] 查找行业: name={name!r}, found={board_code}, total_keys={len(_EM_INDUSTRY_NAME_MAP)}, sample_keys={list(_EM_INDUSTRY_NAME_MAP.keys())[:5]}")
     if board_code:
         js = _em_request(
             "/api/qt/clist/get",
@@ -996,7 +996,7 @@ def get_board_constituents_em(board_name: str) -> dict:
             for k, v in _EM_CONCEPT_NAME_MAP.items():
                 if name in k or k in name:
                     board_code = v
-                    print(f"[板块] 概念模糊匹配: {name!r} → {k!r} ({v})")
+                    log.debug(f"[板块] 概念模糊匹配: {name!r} → {k!r} ({v})")
                     break
         if board_code:
             js = _em_request(
@@ -1126,7 +1126,7 @@ def search_stocks(keyword: str) -> pd.DataFrame:
         _cache_set(cache_key, df, ttl=3600)
         return df
     except Exception as e:
-        print(f"股票搜索失败: {e}")
+        log.warning(f"股票搜索失败: {e}")
         return pd.DataFrame()
 
 
@@ -1149,23 +1149,23 @@ def _fetch_and_cache_hot(limit: int = 20) -> list:
     stocks = _fetch_em_hot_stocks(limit)
     if stocks:
         _cache_set(cache_key, stocks, ttl=120)
-        print(f"[热门] 东方财富涨幅榜获取成功，共 {len(stocks)} 条")
+        log.info(f"[热门] 东方财富涨幅榜获取成功，共 {len(stocks)} 条")
         return stocks
 
     # ② 同花顺热门
     stocks = _fetch_ths_hot_stocks(limit)
     if stocks:
         _cache_set(cache_key, stocks, ttl=120)
-        print(f"[热门] 同花顺热门获取成功，共 {len(stocks)} 条")
+        log.info(f"[热门] 同花顺热门获取成功，共 {len(stocks)} 条")
         return stocks
 
     # ③ 新浪人气榜兜底
     stocks = _fetch_sina_hot_stocks(limit)
     _cache_set(cache_key, stocks, ttl=60)
     if stocks:
-        print(f"[热门] 新浪人气榜获取成功，共 {len(stocks)} 条")
+        log.info(f"[热门] 新浪人气榜获取成功，共 {len(stocks)} 条")
     else:
-        print("[热门] 所有来源均获取失败")
+        log.warning("[热门] 所有来源均获取失败")
     return stocks
 
 
@@ -1214,7 +1214,7 @@ def _fetch_em_hot_stocks(limit: int) -> list:
                 })
             return stocks
         except Exception as e:
-            print(f"[热门-分页] 第 {pn} 页失败: {e}")
+            log.warning(f"[热门-分页] 第 {pn} 页失败: {e}")
             return []
 
     all_stocks: list[dict] = []
@@ -1226,7 +1226,7 @@ def _fetch_em_hot_stocks(limit: int) -> list:
                 all_stocks.extend(page_stocks)
             except Exception as e:
                 pn = futures[future]
-                print(f"[热门-分页] 第 {pn} 页超时/异常: {e}")
+                log.warning(f"[热门-分页] 第 {pn} 页超时/异常: {e}")
 
     # 按涨幅降序重新编号
     all_stocks.sort(key=lambda x: x.get("change_pct", 0), reverse=True)
@@ -1266,7 +1266,7 @@ def _fetch_ths_hot_stocks(limit: int) -> list:
             })
         return stocks
     except Exception as e:
-        print(f"[热门] 同花顺热门失败: {e}")
+        log.warning(f"[热门] 同花顺热门失败: {e}")
         return []
 
 
@@ -1283,7 +1283,7 @@ def _fetch_sina_hot_stocks(limit: int) -> list:
         text = resp.content.decode("gbk", errors="replace")
         data = json.loads(text)
         if not isinstance(data, list):
-            print(f"[热门] 新浪人气榜返回格式异常: {text[:200]}")
+            log.warning(f"[热门] 新浪人气榜返回格式异常: {text[:200]}")
             return []
 
         stocks = []
@@ -1314,7 +1314,7 @@ def _fetch_sina_hot_stocks(limit: int) -> list:
             })
         return stocks
     except Exception as e:
-        print(f"[热门] 新浪人气榜失败: {e}")
+        log.warning(f"[热门] 新浪人气榜失败: {e}")
         return []
 
 
@@ -1327,7 +1327,7 @@ def warm_hot_cache():
             time.sleep(300)
     t = threading.Thread(target=_loop, daemon=True)
     t.start()
-    print("热门股票后台预热线程已启动")
+    log.info("热门股票后台预热线程已启动")
 
 
 def get_stock_info(code: str) -> dict:
@@ -1371,7 +1371,7 @@ def get_stock_info(code: str) -> dict:
                 return info
         return {}
     except Exception as e:
-        print(f"股票信息获取失败: {e}")
+        log.warning(f"股票信息获取失败: {e}")
         return {}
 
 
@@ -1412,7 +1412,7 @@ def get_stock_depth_em(code: str) -> dict:
             if d:
                 break
         except Exception as e:
-            print(f"[盘口] {host} 失败: {e}")
+            log.warning(f"[盘口] {host} 失败: {e}")
             continue
 
     if not d:
@@ -1482,7 +1482,7 @@ def get_stock_boards_em(code: str) -> dict:
             if d:
                 break
         except Exception as e:
-            print(f"[板块] {host} 失败: {e}")
+            log.warning(f"[板块] {host} 失败: {e}")
             continue
 
     if d is None:
@@ -1571,7 +1571,7 @@ def get_stock_symbol_news_em(code: str, limit: int = 8) -> list:
         _cache_set(cache_key, items, ttl=300)
         return items
     except Exception as e:
-        print(f"[个股新闻] 失败 {code}: {e}")
+        log.warning(f"[个股新闻] 失败 {code}: {e}")
         return []
 
 
@@ -1628,5 +1628,5 @@ def _get_minute_data_sina(code: str, market: str, period: str, adjust: str = "qf
         df = pd.DataFrame(records)
         return df
     except Exception as e:
-        print(f"新浪分钟数据获取失败 {code} {period}: {e}")
+        log.warning(f"新浪分钟数据获取失败 {code} {period}: {e}")
         return pd.DataFrame()

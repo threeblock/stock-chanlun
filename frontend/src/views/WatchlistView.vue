@@ -88,10 +88,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWatchlistStore } from '../stores/watchlist'
 import toast from '../composables/useToast'
+import { useVisibilityRefresh } from '../composables/useVisibilityRefresh'
 
 const router = useRouter()
 const store = useWatchlistStore()
@@ -180,33 +181,12 @@ async function removeStock(code: string) {
   toast.info('已从自选股移除')
 }
 
-let refreshTimer: ReturnType<typeof setInterval> | null = null
-
-function startAutoRefresh() {
-  if (refreshTimer) clearInterval(refreshTimer)
-  refreshTimer = setInterval(async () => {
-    try {
-      await store.fetchWatchlist()
-    } catch {
-      // silent refresh failure
-    }
-  }, AUTO_REFRESH_INTERVAL)
-}
-
-function stopAutoRefresh() {
-  if (refreshTimer) {
-    clearInterval(refreshTimer)
-    refreshTimer = null
-  }
-}
+useVisibilityRefresh(async () => {
+  await store.fetchWatchlist()
+}, AUTO_REFRESH_INTERVAL)
 
 onMounted(() => {
   store.fetchWatchlist()
-  startAutoRefresh()
-})
-
-onUnmounted(() => {
-  stopAutoRefresh()
 })
 </script>
 

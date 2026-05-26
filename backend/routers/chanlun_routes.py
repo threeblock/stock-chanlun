@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -17,9 +18,10 @@ from core.chanlun_analysis import get_kline_df_for_ai, level_to_period, run_anal
 from core.chanlun_response import serialize_chanlun_analysis
 from deps import check_chanlun_rate_limits, client_ip
 from services.akshare_service import get_kline_hist
-from utils import chanlun_cache
+from utils import ai_signal_cache, chanlun_cache
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
 
 @router.get("/api/chanlun/{code}", tags=["缠论"], summary="缠论完整分析")
@@ -123,28 +125,13 @@ async def chanlun_multi_level(
     }
 
 
-@router.get("/api/chanlun/{code}/ai", tags=["缠论"], summary="AI 策略信号（背驰 + 规则 + LLM）")
-async def ai_signal(
-    request: Request,
-    code: str,
-    level: str = Query("daily"),
-    model: str = Query("deepseek", description="AI 模型：deepseek / gemini"),
-):
-    check_chanlun_rate_limits(client_ip(request))
-
-    try:
-        return await _ai_signal_impl(code, level, model)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"AI 策略生成失败: {e!s}",
-        ) from e
+def _ai_signal_cache_key(code: str, level: str, model: str, use_llm: bool) -> str:
+    return f"ai:{code}:{level}:{model}:{'llm' if use_llm else 'rule'}"
 
 
-async def _ai_signal_impl(code: str, level: str, model: str) -> dict:
-    df_for_ai, result = await asyncio.to_thread(get_kline_df_for_ai, code, level)
+def build_ai_signal_response(code: str, level: str, model: str, use_llm: bool) -> dict:
+    """规则策略 + 可选 LLM；供线程池与缓存复用。"""
+    df_for_ai, result = get_kline_df_for_ai(code, level)
     current_price = float(result.klines[-1].close) if result.klines else 0.0
 
     divergence = None
@@ -153,7 +140,7 @@ async def _ai_signal_impl(code: str, level: str, model: str) -> dict:
             div_detector = DivergenceDetector(df_for_ai.tail(200))
             divergence = div_detector.check_divergence(result.bis)
         except Exception:
-            pass
+            log.debug("背驰检测失败 code=%s", code, exc_info=True)
 
     classifier = WaveClassifier()
     wave_class = classifier.classify(result.xiangs, result.zhongshus, current_price)
@@ -193,29 +180,31 @@ async def _ai_signal_impl(code: str, level: str, model: str) -> dict:
                     ]
                 )
         except Exception:
-            pass
+            log.debug("多级别共振计算失败 code=%s", code, exc_info=True)
 
     llm_result = None
     llm_error = None
-    try:
-        llm = get_llm_client(model)
-        prompt = build_analysis_prompt(
-            code=code,
-            level=level,
-            klines=[k.__dict__ for k in result.klines],
-            trend=wave_class["trend"],
-            divergence=divergence,
-            signals=[s.__dict__ for s in result.signals],
-            zhongshus=[z.__dict__ for z in result.zhongshus],
-            bis=[b.__dict__ for b in result.bis],
-        )
-        raw = llm.chat(prompt, system=SYSTEM_PROMPT, temperature=0.3)
-        llm_result = parse_llm_response(raw)
-        if not isinstance(llm_result, dict):
-            llm_result = None
-            llm_error = "LLM 解析结果非对象"
-    except Exception as e:
-        llm_error = str(e)
+    if use_llm:
+        try:
+            llm = get_llm_client(model)
+            prompt = build_analysis_prompt(
+                code=code,
+                level=level,
+                klines=[k.__dict__ for k in result.klines],
+                trend=wave_class["trend"],
+                divergence=divergence,
+                signals=[s.__dict__ for s in result.signals],
+                zhongshus=[z.__dict__ for z in result.zhongshus],
+                bis=[b.__dict__ for b in result.bis],
+            )
+            raw = llm.chat(prompt, system=SYSTEM_PROMPT, temperature=0.3)
+            llm_result = parse_llm_response(raw)
+            if not isinstance(llm_result, dict):
+                llm_result = None
+                llm_error = "LLM 解析结果非对象"
+        except Exception as e:
+            llm_error = str(e)
+            log.warning("LLM 策略生成失败 code=%s model=%s: %s", code, model, e)
 
     lr = llm_result if isinstance(llm_result, dict) else None
 
@@ -237,5 +226,37 @@ async def _ai_signal_impl(code: str, level: str, model: str) -> dict:
             "model": model,
             "used": lr is not None and llm_error is None,
             "error": llm_error,
+            "skipped": not use_llm,
         },
     }
+
+
+@router.get("/api/chanlun/{code}/ai", tags=["缠论"], summary="AI 策略信号（背驰 + 规则 + 可选 LLM）")
+async def ai_signal(
+    request: Request,
+    code: str,
+    level: str = Query("daily"),
+    model: str = Query("deepseek", description="AI 模型：deepseek / gemini"),
+    use_llm: bool = Query(
+        False,
+        description="为 true 时调用大模型增强；默认仅规则引擎，响应更快",
+    ),
+):
+    check_chanlun_rate_limits(client_ip(request))
+
+    cache_key = _ai_signal_cache_key(code, level, model, use_llm)
+    cached = ai_signal_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        payload = await asyncio.to_thread(build_ai_signal_response, code, level, model, use_llm)
+        ai_signal_cache.set(cache_key, payload)
+        return payload
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"AI 策略生成失败: {e!s}",
+        ) from e

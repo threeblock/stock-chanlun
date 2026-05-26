@@ -34,6 +34,8 @@ class XiangSegment(BaseModel):
     direction: Literal["up", "down"]
     high: float
     low: float
+    start_price: float = 0.0
+    end_price: float = 0.0
     bi_ids: list[str]  # 组成该线段的笔ID列表
     level: int = 2     # 1=笔级, 2=段级, 3=更大级别
 

@@ -6,11 +6,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import threading
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 
@@ -47,7 +50,7 @@ def _load_watchlist_from_disk() -> dict[str, str]:
             data = json.loads(_WATCHLIST_FILE.read_text(encoding="utf-8"))
             return {str(k).zfill(6): str(v) for k, v in data.items() if str(k).strip()}
     except Exception as e:
-        print(f"自选股加载失败: {e}")
+        log.warning("自选股加载失败: %s", e)
     return {}
 
 
@@ -56,7 +59,7 @@ def _load_comments_from_disk() -> dict[str, list[dict]]:
         if _COMMENTS_FILE.exists():
             return json.loads(_COMMENTS_FILE.read_text(encoding="utf-8"))
     except Exception as e:
-        print(f"[评论] 加载失败: {e}")
+        log.warning("评论加载失败: %s", e)
     return {}
 
 
@@ -154,9 +157,9 @@ def apply_startup_ai_model() -> None:
         settings = load_settings()
         model = settings.get("ai_model", "deepseek")
         set_llm_model(model)
-        print(f"AI 模型已恢复: {model}")
+        log.info("AI 模型已恢复: %s", model)
     except Exception:
-        pass
+        log.debug("启动时恢复 AI 模型失败", exc_info=True)
 
 
 init_stores()

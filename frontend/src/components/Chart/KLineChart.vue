@@ -29,19 +29,21 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import echarts from '../../utils/echarts'
 import type { KLine, Bi, XiangSegment, Zhongshu, Signal, AISignal, SupportResistance } from '../../api/stock'
 import type { IndicatorConfig } from '../../stores/chanlun'
 import { computeDualMacdSkdjMarkerIndices } from '../../utils/stockIndicators'
 import { simplifySupportResistanceLevels } from '../../utils/chartOverlayUtils'
+import { downsampleKlines } from '../../utils/chartDownsample'
+import { useDebouncedCallback } from '../../composables/useDebounce'
 
 const props = defineProps<{
   klines: KLine[]
   bis: Bi[]
   zhongshus: Zhongshu[]
   signals: Signal[]
-  xiangs?: { id: string; start: string; end: string; direction: 'up' | 'down'; high: number; low: number }[]
+  xiangs?: XiangSegment[]
   aiSignal?: AISignal | null
   supportResistance?: SupportResistance[]
   indicators?: IndicatorConfig
@@ -51,6 +53,9 @@ const props = defineProps<{
 const chartRef = ref<HTMLDivElement | null>(null)
 const barInfoText = ref('')
 let chart: echarts.ECharts | null = null
+
+/** 主图渲染用降采样序列；缠论叠加仍基于全量 props */
+const displayKlines = computed(() => downsampleKlines(props.klines))
 
 /** 获取指标配置，如果未提供则默认全部显示 */
 function getIndicators(): Required<IndicatorConfig> {
@@ -150,22 +155,25 @@ let lastMa20: (number | null)[] = []
 let lastMa60: (number | null)[] = []
 
 function formatBarLine(idx: number): string {
-  if (idx < 0 || idx >= props.klines.length) return ''
-  const k = props.klines[idx]
+  const series = displayKlines.value
+  if (idx < 0 || idx >= series.length) return ''
+  const k = series[idx]
   const d = lastDates[idx] ?? k.date.slice(0, 10)
   return `${d}  开盘 ${fmtPrice(k.open)}  收盘 ${fmtPrice(k.close)}  最高 ${fmtPrice(k.high)}  最低 ${fmtPrice(k.low)}  |  MA5 ${fmtPrice(lastMa5[idx])}  MA20 ${fmtPrice(lastMa20[idx])}  MA60 ${fmtPrice(lastMa60[idx])}`
 }
 
 function setBarInfoByIndex(idx: number) {
-  if (!props.klines.length) { barInfoText.value = ''; return }
-  const i = Math.max(0, Math.min(idx, props.klines.length - 1))
+  const series = displayKlines.value
+  if (!series.length) { barInfoText.value = ''; return }
+  const i = Math.max(0, Math.min(idx, series.length - 1))
   barInfoText.value = formatBarLine(i)
 }
 
 function buildOption() {
-  const dates = props.klines.map(k => k.date.slice(0, 10))
-  const ohlc = props.klines.map(k => [k.open, k.close, k.low, k.high])
-  const closes = props.klines.map(k => k.close)
+  const seriesKlines = displayKlines.value
+  const dates = seriesKlines.map(k => k.date.slice(0, 10))
+  const ohlc = seriesKlines.map(k => [k.open, k.close, k.low, k.high])
+  const closes = seriesKlines.map(k => k.close)
   const ind = getIndicators()
   const ma5 = ind.ma5 ? calcMA(closes, 5) : []
   const ma20 = ind.ma20 ? calcMA(closes, 20) : []
@@ -175,7 +183,7 @@ function buildOption() {
 
   // 预处理缠论数据，提前计算 bar 下标（修复 date 对不齐时 _e=-1 导致整段被跳过）
   const nBar = dates.length
-  const refPx = props.klines.length > 0 ? props.klines[props.klines.length - 1].close : 1
+  const refPx = seriesKlines.length > 0 ? seriesKlines[seriesKlines.length - 1].close : 1
   const overlayData: ChanlunOverlayPayload = {
     bis: ind.bis ? props.bis.flatMap(b => {
       const r = resolveBarRange(b.start, b.end, nBar, dates)
@@ -419,8 +427,8 @@ function applyChanlunGraphic() {
   for (const bi of bis) {
     if (bi._e < viewS || bi._s > viewE) continue
     if (bi._e < bi._s) continue
-    const p1 = pixelAtIdxCached(bi._s, bi.direction === 'up' ? bi.low : bi.high)
-    const p2 = pixelAtIdxCached(bi._e, bi.direction === 'up' ? bi.high : bi.low)
+    const p1 = pixelAtIdxCached(bi._s, bi.start_price ?? (bi.direction === 'up' ? bi.low : bi.high))
+    const p2 = pixelAtIdxCached(bi._e, bi.end_price ?? (bi.direction === 'up' ? bi.high : bi.low))
     if (!p1 || !p2) continue
     const color = bi.direction === 'up' ? '#f85149' : '#3fb950'
     children.push({
@@ -455,11 +463,11 @@ function applyChanlunGraphic() {
     if (xiang._e < xiang._s) continue
     const p1 = pixelAtIdxCached(
       xiang._s,
-      xiang.direction === 'up' ? xiang.low : xiang.high
+      xiang.start_price ?? (xiang.direction === 'up' ? xiang.low : xiang.high)
     )
     const p2 = pixelAtIdxCached(
       xiang._e,
-      xiang.direction === 'up' ? xiang.high : xiang.low
+      xiang.end_price ?? (xiang.direction === 'up' ? xiang.high : xiang.low)
     )
     if (!p1 || !p2) continue
     const color = xiang.direction === 'up' ? '#ffe066' : '#ff9f7f'
@@ -684,6 +692,8 @@ function updateChart() {
  * bis/xiangs/zhongshus/signals/aiSignal/supportResistance 变化时调用。
  */
 function updateOverlayOnly() {
+  if (!chart) return
+  chart.setOption(buildOption(), { replaceMerge: ['graphic'] })
   queueChanlunGraphic()
 }
 
@@ -696,10 +706,10 @@ function updateIndicatorOption() {
   queueChanlunGraphic()
 }
 
-function onResize() {
+const onResize = useDebouncedCallback(() => {
   chart?.resize()
   queueChanlunGraphic()
-}
+}, 150)
 
 onMounted(() => {
   initChart()
@@ -725,7 +735,7 @@ watch(
   () => {
     if (!chart) return
     chart.setOption(buildOption())
-    setBarInfoByIndex(props.klines.length - 1)
+    setBarInfoByIndex(displayKlines.value.length - 1)
     queueChanlunGraphic()
   }
 )

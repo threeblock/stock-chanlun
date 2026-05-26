@@ -83,6 +83,14 @@
       </div>
 
       <div class="action-bar">
+        <button
+          v-if="store.aiSignal?.llm?.skipped"
+          class="btn btn-ghost"
+          :disabled="store.loadingAI"
+          @click="onDeepAnalyze"
+        >
+          {{ store.loadingAI ? '分析中…' : 'LLM深度' }}
+        </button>
         <button class="btn btn-ghost" @click="loadData" :disabled="loadingAny">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
@@ -111,22 +119,22 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { useChanlunStore, type LevelOption } from '@/stores/chanlun'
-import { stockApi, type Quote, type StockInfoFields } from '@/api/stock'
+import type { LevelOption } from '@/stores/chanlun'
+import { stockApi } from '@/api/stock'
+import type { Quote } from '@/api/stock'
 import toast from '@/composables/useToast'
+import { useStockPage } from '@/composables/useStockPage'
 import MobileKLineChart from '../components/MobileKLineChart.vue'
 import MobileStockSheet from '../components/MobileStockSheet.vue'
 import MobileIndicatorSelector from '../components/MobileIndicatorSelector.vue'
 
 const route = useRoute()
-const store = useChanlunStore()
+const { store, quote, stockInfo, loadStock, changeLevel: changeLevelBase, refreshAIStrategy } = useStockPage()
 
 const zoomStart = ref(0)
 const zoomEnd = ref(100)
 const showSheet = ref(false)
 const signalsExpanded = ref(false)
-const quote = ref<Quote | null>(null)
-const stockInfo = ref<StockInfoFields | null>(null)
 const isWatching = ref(false)
 
 function onZoomChange(s: number, e: number) {
@@ -200,23 +208,21 @@ function signalBadgeClass(type: string) {
   return 'badge-wait'
 }
 
-async function loadData() {
-  const code = stockCode.value
-  if (!code) return
-  await store.loadAll(code, currentLevel.value)
-  const settled = await Promise.allSettled([
-    stockApi.quote(code),
-    stockApi.info(code),
-  ])
-  if (settled[0].status === 'fulfilled') quote.value = settled[0].value.data as Quote
-  if (settled[1].status === 'fulfilled') {
-    const inf = settled[1].value.data.info
-    stockInfo.value = inf && Object.keys(inf).length ? inf : null
-  }
+async function changeLevel(level: LevelOption) {
+  await changeLevelBase(stockCode.value, level)
 }
 
-async function changeLevel(level: LevelOption) {
-  await store.loadAll(stockCode.value, level)
+async function loadData() {
+  await loadStock(stockCode.value, currentLevel.value)
+}
+
+async function onDeepAnalyze() {
+  try {
+    await refreshAIStrategy(stockCode.value, { useLlm: true })
+    toast.success('LLM 深度分析已完成')
+  } catch (e: unknown) {
+    toast.error(e instanceof Error ? e.message : '深度分析失败')
+  }
 }
 
 async function toggleWatch() {

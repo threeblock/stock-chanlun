@@ -14,6 +14,7 @@ from services.akshare_service import (
     get_realtime_quote,
     get_stock_boards_em,
 )
+from config import SCREENING_WORKERS
 from utils import chanlun_cache
 
 log = logging.getLogger(__name__)
@@ -338,9 +339,9 @@ def screen_stocks_stream(
     t3 = time.time()
     log.info("选股预过滤完成 remaining=%s elapsed=%.1fs", len(prefiltered), t3 - t2)
 
-    # Step 4：并发缠论分析，结果随算随 yield
-    WORKERS = 20
-    pool = ThreadPoolExecutor(max_workers=WORKERS)
+    # Step 4：并发缠论分析，结果随算随 yield（workers 见 SCREENING_WORKERS 环境变量）
+    workers = min(SCREENING_WORKERS, max(1, len(prefiltered)))
+    pool = ThreadPoolExecutor(max_workers=workers)
     futures = {pool.submit(_analyze_stock, c, level): c for c in prefiltered}
     done_count = 0
     emitted_count = 0
