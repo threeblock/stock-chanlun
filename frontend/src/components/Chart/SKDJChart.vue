@@ -3,10 +3,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import echarts from '../../utils/echarts'
 import type { KLine } from '../../api/stock'
 import { calcSKDJ } from '../../utils/stockIndicators'
+import { sliceKlinesForZoom } from '../../utils/chartDownsample'
+import { useDebouncedCallback } from '../../composables/useDebounce'
 
 const props = defineProps<{ klines: KLine[]; zoomStart?: number; zoomEnd?: number }>()
 
@@ -14,13 +16,18 @@ const chartRef = ref<HTMLDivElement | null>(null)
 let chart: echarts.ECharts | null = null
 const zoomId = `skdj-zoom-${Math.random().toString(36).slice(2)}`
 
+const seriesKlines = computed(() =>
+  sliceKlinesForZoom(props.klines, props.zoomStart ?? 0, props.zoomEnd ?? 100),
+)
+
 function buildOption() {
-  if (props.klines.length < 12) return {}
-  const highs = props.klines.map(k => Number(k.high))
-  const lows = props.klines.map(k => Number(k.low))
-  const closes = props.klines.map(k => Number(k.close))
+  const bars = seriesKlines.value
+  if (bars.length < 12) return {}
+  const highs = bars.map(k => Number(k.high))
+  const lows = bars.map(k => Number(k.low))
+  const closes = bars.map(k => Number(k.close))
   const { sk, sd } = calcSKDJ(highs, lows, closes)
-  const dates = props.klines.map(k => k.date.slice(0, 10))
+  const dates = bars.map(k => k.date.slice(0, 10))
   const s = props.zoomStart ?? 0
   const e = props.zoomEnd ?? 100
 
@@ -77,13 +84,18 @@ function buildOption() {
   }
 }
 
+const onResize = useDebouncedCallback(() => chart?.resize(), 150)
+
 onMounted(() => {
   if (!chartRef.value) return
   chart = echarts.init(chartRef.value)
   chart.setOption(buildOption())
-  window.addEventListener('resize', () => chart?.resize())
+  window.addEventListener('resize', onResize)
 })
-onUnmounted(() => { chart?.dispose() })
+onUnmounted(() => {
+  window.removeEventListener('resize', onResize)
+  chart?.dispose()
+})
 
 watch([() => props.klines, () => props.zoomStart, () => props.zoomEnd], () => {
   if (!chart) return
