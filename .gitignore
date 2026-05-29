@@ -325,6 +325,7 @@ $RECYCLE.BIN/
 # ============================================
 # Claude Code / local agent skills (project-scoped)
 .claude/
+.agents/
 
 # Backend data and cache
 backend/data/
@@ -341,6 +342,9 @@ _probe_*.py
 # Local settings
 settings.local.json
 watchlist.local.json
+backend/settings.json
+backend/watchlist.json
+backend/comments.json
 
 # API keys and secrets
 *.key

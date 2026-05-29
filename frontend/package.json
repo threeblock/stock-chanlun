@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:screenshots": "vite --port 5188 --strictPort",
     "typecheck": "vue-tsc --noEmit",
     "build": "vue-tsc && vite build",
     "preview": "vite preview",

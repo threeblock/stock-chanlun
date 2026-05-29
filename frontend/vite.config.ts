@@ -86,6 +86,7 @@ export default defineConfig(({ mode }) => {
     base: env.VITE_BASE_URL || '/stock-chanlun/',
     server: {
       port: 5173,
+      strictPort: false,
       proxy,
     },
     build: {
