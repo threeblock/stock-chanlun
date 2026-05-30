@@ -383,18 +383,27 @@ export const stockApi = {
     )
   },
 
-  kline(code: string, level: string, limit = 500, startDate?: string, endDate?: string) {
+  kline(
+    code: string,
+    level: string,
+    limit = 500,
+    startDate?: string,
+    endDate?: string,
+    options?: { signal?: AbortSignal },
+  ) {
     const params = new URLSearchParams({ level, limit: String(limit) })
     if (startDate) params.set('start_date', startDate)
     if (endDate) params.set('end_date', endDate)
     return api.get<{ klines: KLine[]; total: number }>(
-      `/stocks/${code}/kline?${params.toString()}`
+      `/stocks/${code}/kline?${params.toString()}`,
+      { signal: options?.signal },
     )
   },
 
-  chanlun(code: string, level: string) {
+  chanlun(code: string, level: string, options?: { signal?: AbortSignal }) {
     return api.get<ChanlunResult>(
-      `/chanlun/${code}?level=${level}`
+      `/chanlun/${code}?level=${level}`,
+      { signal: options?.signal },
     )
   },
 
@@ -402,12 +411,15 @@ export const stockApi = {
     code: string,
     level: string,
     model = 'deepseek',
-    options?: { useLlm?: boolean },
+    options?: { useLlm?: boolean; signal?: AbortSignal },
   ) {
     const params = new URLSearchParams({ level, model })
     if (options?.useLlm) params.set('use_llm', 'true')
     const timeout = options?.useLlm ? 120000 : 45000
-    return api.get<AISignal>(`/chanlun/${code}/ai?${params.toString()}`, { timeout })
+    return api.get<AISignal>(`/chanlun/${code}/ai?${params.toString()}`, {
+      timeout,
+      signal: options?.signal,
+    })
   },
 
   /** 多级别并行缠论分析 */

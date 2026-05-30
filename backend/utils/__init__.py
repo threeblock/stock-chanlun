@@ -73,8 +73,12 @@ class LRUCache:
 # ── 缠论分析结果缓存（5分钟 TTL，最多缓存 256 只股票） ──────────────────────
 chanlun_cache = LRUCache(maxsize=256, ttl=300.0)
 
-# ── AI 策略信号缓存（规则版 90s，含 LLM 版 5 分钟，最多 128 条） ─────────────
-ai_signal_cache = LRUCache(maxsize=128, ttl=300.0)
+# ── AI 策略信号缓存：规则 90s / LLM 5 分钟 ───────────────────────────────────
+ai_signal_rule_cache = LRUCache(maxsize=128, ttl=90.0)
+ai_signal_llm_cache = LRUCache(maxsize=64, ttl=300.0)
+
+# 自选股行情聚合（15s，减轻批量 quote 压力）
+watchlist_quote_cache = LRUCache(maxsize=8, ttl=15.0)
 
 
 # ── HTTP 重试装饰器 ─────────────────────────────────────────────────────────

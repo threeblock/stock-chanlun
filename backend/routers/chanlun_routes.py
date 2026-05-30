@@ -18,7 +18,7 @@ from core.chanlun_analysis import get_kline_df_for_ai, level_to_period, run_anal
 from core.chanlun_response import serialize_chanlun_analysis
 from deps import check_chanlun_rate_limits, client_ip
 from services.akshare_service import get_kline_hist
-from utils import ai_signal_cache, chanlun_cache
+from utils import ai_signal_llm_cache, ai_signal_rule_cache, chanlun_cache
 
 router = APIRouter()
 log = logging.getLogger(__name__)
@@ -245,13 +245,14 @@ async def ai_signal(
     check_chanlun_rate_limits(client_ip(request))
 
     cache_key = _ai_signal_cache_key(code, level, model, use_llm)
-    cached = ai_signal_cache.get(cache_key)
+    cache = ai_signal_llm_cache if use_llm else ai_signal_rule_cache
+    cached = cache.get(cache_key)
     if cached is not None:
         return cached
 
     try:
         payload = await asyncio.to_thread(build_ai_signal_response, code, level, model, use_llm)
-        ai_signal_cache.set(cache_key, payload)
+        cache.set(cache_key, payload)
         return payload
     except HTTPException:
         raise

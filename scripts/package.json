@@ -1,0 +1,12 @@
+{
+  "name": "chanstock-screenshots",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "screenshots": "node capture-readme-screenshots.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.49.1",
+    "sharp": "^0.33.5"
+  }
+}

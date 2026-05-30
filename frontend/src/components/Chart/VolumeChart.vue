@@ -3,9 +3,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import echarts from '../../utils/echarts'
 import type { KLine } from '../../api/stock'
+import { sliceKlinesForZoom } from '../../utils/chartDownsample'
+import { useDebouncedCallback } from '../../composables/useDebounce'
 
 const props = defineProps<{ klines: KLine[]; zoomStart?: number; zoomEnd?: number }>()
 
@@ -16,13 +18,18 @@ const COLOR_UP = '#f85149'
 const COLOR_DOWN = '#3fb950'
 const zoomId = `vol-zoom-${Math.random().toString(36).slice(2)}`
 
+const seriesKlines = computed(() =>
+  sliceKlinesForZoom(props.klines, props.zoomStart ?? 0, props.zoomEnd ?? 100),
+)
+
 function buildOption() {
-  if (props.klines.length < 1) return {}
-  const dates = props.klines.map(k => k.date.slice(0, 10))
-  const vols = props.klines.map(k => k.volume ?? 0)
-  const colors = props.klines.map((k, i) => {
+  const bars = seriesKlines.value
+  if (bars.length < 1) return {}
+  const dates = bars.map(k => k.date.slice(0, 10))
+  const vols = bars.map(k => k.volume ?? 0)
+  const colors = bars.map((k, i) => {
     if (i === 0) return k.close >= k.open ? COLOR_UP : COLOR_DOWN
-    const prev = props.klines[i - 1].close
+    const prev = bars[i - 1].close
     return k.close >= prev ? COLOR_UP : COLOR_DOWN
   })
   const s = props.zoomStart ?? 0
@@ -66,8 +73,8 @@ function buildOption() {
         const arr = Array.isArray(params) ? params : [params]
         const p = arr[0] as { dataIndex?: number; name?: string }
         const idx = p.dataIndex
-        if (idx == null || idx < 0 || idx >= props.klines.length) return ''
-        const k = props.klines[idx]
+        if (idx == null || idx < 0 || idx >= bars.length) return ''
+        const k = bars[idx]
         const v = k.volume ?? 0
         let vs = String(v)
         if (v >= 1e8) vs = (v / 1e8).toFixed(2) + ' 亿'
@@ -78,13 +85,18 @@ function buildOption() {
   }
 }
 
+const onResize = useDebouncedCallback(() => chart?.resize(), 150)
+
 onMounted(() => {
   if (!chartRef.value) return
   chart = echarts.init(chartRef.value)
   chart.setOption(buildOption())
-  window.addEventListener('resize', () => chart?.resize())
+  window.addEventListener('resize', onResize)
 })
-onUnmounted(() => { chart?.dispose() })
+onUnmounted(() => {
+  window.removeEventListener('resize', onResize)
+  chart?.dispose()
+})
 
 watch([() => props.klines, () => props.zoomStart, () => props.zoomEnd], () => {
   if (!chart) return

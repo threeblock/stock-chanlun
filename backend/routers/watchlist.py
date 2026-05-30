@@ -5,6 +5,7 @@ import asyncio
 from fastapi import APIRouter
 from services.akshare_service import get_realtime_quote, normalize_stock_code
 from stores.local_json import get_watchlist_map, watchlist_add, watchlist_remove
+from utils import watchlist_quote_cache
 
 router = APIRouter()
 
@@ -14,12 +15,19 @@ def _get_watchlist_response():
     if not wl:
         return {"stocks": []}
 
-    codes = list(wl.keys())
+    codes = sorted(wl.keys())
+    cache_key = ",".join(codes)
+    cached = watchlist_quote_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     df = get_realtime_quote(codes)
     if df.empty:
-        return {"stocks": [], "total": 0}
+        empty = {"stocks": [], "total": len(wl)}
+        watchlist_quote_cache.set(cache_key, empty)
+        return empty
 
-    return {
+    payload = {
         "stocks": [
             {
                 "code": str(row.get("代码", "")),
@@ -32,6 +40,8 @@ def _get_watchlist_response():
         ],
         "total": len(wl),
     }
+    watchlist_quote_cache.set(cache_key, payload)
+    return payload
 
 
 @router.get("/api/watchlist", tags=["自选"])
@@ -39,10 +49,15 @@ async def get_watchlist():
     return await asyncio.to_thread(_get_watchlist_response)
 
 
+def _invalidate_watchlist_cache() -> None:
+    watchlist_quote_cache.clear()
+
+
 @router.post("/api/watchlist/{code}", tags=["自选"])
 async def add_watchlist(code: str):
     sym, _ = normalize_stock_code(code)
     added_at, is_new = watchlist_add(sym)
+    _invalidate_watchlist_cache()
     wl = get_watchlist_map()
     return {
         "code": sym,
@@ -56,5 +71,6 @@ async def add_watchlist(code: str):
 async def remove_watchlist(code: str):
     sym, _ = normalize_stock_code(code)
     watchlist_remove(sym)
+    _invalidate_watchlist_cache()
     wl = get_watchlist_map()
     return {"code": sym, "removed": True, "total": len(wl)}

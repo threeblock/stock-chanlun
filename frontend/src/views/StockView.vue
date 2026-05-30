@@ -525,13 +525,13 @@ function resetDateFilter() {
   endDate.value = ''
   showDatePanel.value = false
   cleanupDatePanelHandler()
-  store.loadAll(stockCode.value, currentLevel.value)
+  loadStock(stockCode.value, currentLevel.value, startDate.value || undefined, endDate.value || undefined)
 }
 
 function applyDateFilter() {
   showDatePanel.value = false
   cleanupDatePanelHandler()
-  store.loadAll(stockCode.value, currentLevel.value, startDate.value || undefined, endDate.value || undefined)
+  loadStock(stockCode.value, currentLevel.value, startDate.value || undefined, endDate.value || undefined)
 }
 
 function _num(v: unknown): number | null {

@@ -52,6 +52,8 @@ import type { KLine, Bi, XiangSegment, Zhongshu, Signal, AISignal, SupportResist
 import type { IndicatorConfig } from '@/stores/chanlun'
 import { calcMACD, calcSKDJ, calcRSI, computeDualMacdSkdjMarkerIndices } from '@/utils/stockIndicators'
 import { simplifySupportResistanceLevels } from '@/utils/chartOverlayUtils'
+import { downsampleKlines } from '@/utils/chartDownsample'
+import { useDebouncedCallback } from '@/composables/useDebounce'
 
 const LONG_PRESS_DELAY = 400
 const SWIPE_THRESHOLD = 50
@@ -408,7 +410,7 @@ function queueGraphic() {
 
 // ── 构建 ECharts Option ───────────────────────────────────────────────────────
 function buildOption(chartH: number = 300) {
-  const klines = props.klines
+  const klines = downsampleKlines(props.klines)
   if (!klines.length) return {}
 
   const dates = klines.map(k => k.date.slice(0, 10))
@@ -634,10 +636,10 @@ function getContainerHeight(): number {
   return chartRef.value?.clientHeight || 300
 }
 
-function onResize() {
+const onResize = useDebouncedCallback(() => {
   chart?.resize()
   queueGraphic()
-}
+}, 150)
 
 onMounted(() => {
   initChart()
