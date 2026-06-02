@@ -5,11 +5,15 @@ from fastapi import APIRouter, HTTPException, Query
 from ai.llm_client import set_llm_model
 from config import SCREENING_WORKERS
 from stores.local_json import load_settings, save_settings
+from ai.chat_sessions import chat_session_stats
+from services.akshare_service import akshare_cache_stats
 from utils import (
     ai_signal_llm_cache,
     ai_signal_rule_cache,
     chanlun_cache,
     chanlun_global_limiter,
+    chanlun_ip_limiter,
+    kline_global_limiter,
     watchlist_quote_cache,
 )
 
@@ -27,7 +31,14 @@ def health_check():
             "ai_signal_rule": ai_signal_rule_cache.stats(),
             "ai_signal_llm": ai_signal_llm_cache.stats(),
             "watchlist_quote": watchlist_quote_cache.stats(),
+            "akshare": akshare_cache_stats(),
         },
+        "rate_limiters": {
+            "chanlun_global_remaining": chanlun_global_limiter.get_remaining("global"),
+            "chanlun_ip_buckets": chanlun_ip_limiter.tracked_key_count(),
+            "kline_global_remaining": kline_global_limiter.get_remaining("global"),
+        },
+        "chat_sessions": chat_session_stats(),
         "screening_workers": SCREENING_WORKERS,
     }
 

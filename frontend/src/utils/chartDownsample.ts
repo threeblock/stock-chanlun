@@ -1,47 +1,117 @@
 import type { KLine } from '../api/stock'
 
-/** 主图渲染超过此根数时做等距降采样（保留首尾） */
+/** 主图渲染超过此根数时做 LTTB 降采样（保留 OHLC 极值） */
 export const KLINE_DISPLAY_MAX = 600
 
-/** 副图超过此根数且已缩放时，仅渲染可见窗口附近数据 */
-export const SUBCHART_SLICE_THRESHOLD = 400
+function typicalPrice(k: KLine): number {
+  return (k.high + k.low + k.close) / 3
+}
 
 /**
- * 等距降采样 K 线，用于 ECharts 主图性能；缠论叠加仍用全量 props。
+ * Largest-Triangle-Three-Buckets — 在保持走势形状的前提下减少点数。
+ * 返回包含首尾的下标列表。
+ */
+export function lttbIndices(yValues: number[], threshold: number): number[] {
+  const n = yValues.length
+  if (threshold >= n || threshold < 3) {
+    return Array.from({ length: n }, (_, i) => i)
+  }
+
+  const sampled: number[] = [0]
+  const bucketSize = (n - 2) / (threshold - 2)
+  let a = 0
+
+  for (let i = 0; i < threshold - 2; i++) {
+    const avgRangeStart = Math.floor((i + 1) * bucketSize) + 1
+    let avgRangeEnd = Math.floor((i + 2) * bucketSize) + 1
+    avgRangeEnd = Math.min(avgRangeEnd, n)
+
+    let avgX = 0
+    let avgY = 0
+    const avgLen = avgRangeEnd - avgRangeStart
+    for (let j = avgRangeStart; j < avgRangeEnd; j++) {
+      avgX += j
+      avgY += yValues[j]
+    }
+    if (avgLen > 0) {
+      avgX /= avgLen
+      avgY /= avgLen
+    }
+
+    const rangeOffs = Math.floor(i * bucketSize) + 1
+    const rangeTo = Math.floor((i + 1) * bucketSize) + 1
+    const pointAx = a
+    const pointAy = yValues[a]
+
+    let maxArea = -1
+    let maxAreaPoint = rangeOffs
+
+    for (let j = rangeOffs; j < rangeTo; j++) {
+      const area = Math.abs(
+        (pointAx - avgX) * (yValues[j] - pointAy) -
+          (pointAx - j) * (avgY - pointAy),
+      ) * 0.5
+      if (area > maxArea) {
+        maxArea = area
+        maxAreaPoint = j
+      }
+    }
+
+    sampled.push(maxAreaPoint)
+    a = maxAreaPoint
+  }
+
+  sampled.push(n - 1)
+  return sampled
+}
+
+/** 在 LTTB 相邻锚点之间补充区间最高/最低价对应 K 线，避免影线被抹平 */
+function injectOhlcExtrema(klines: KLine[], indices: number[]): number[] {
+  const set = new Set(indices)
+  const sorted = [...indices].sort((a, b) => a - b)
+
+  for (let k = 0; k < sorted.length - 1; k++) {
+    const start = sorted[k]
+    const end = sorted[k + 1]
+    if (end - start < 3) continue
+
+    let maxHiIdx = start
+    let minLoIdx = start
+    let maxHi = klines[start].high
+    let minLo = klines[start].low
+
+    for (let j = start + 1; j < end; j++) {
+      if (klines[j].high > maxHi) {
+        maxHi = klines[j].high
+        maxHiIdx = j
+      }
+      if (klines[j].low < minLo) {
+        minLo = klines[j].low
+        minLoIdx = j
+      }
+    }
+    set.add(maxHiIdx)
+    set.add(minLoIdx)
+  }
+
+  return [...set].sort((a, b) => a - b)
+}
+
+/**
+ * LTTB 降采样 K 线（用于 ECharts 主图）；缠论叠加仍用全量 props。
  */
 export function downsampleKlines(klines: KLine[], maxPoints = KLINE_DISPLAY_MAX): KLine[] {
   const n = klines.length
   if (n <= maxPoints) return klines
-  const step = Math.ceil(n / maxPoints)
-  const out: KLine[] = []
-  for (let i = 0; i < n; i += step) {
-    out.push(klines[i])
-  }
-  const last = klines[n - 1]
-  if (out[out.length - 1]?.date !== last.date) {
-    out.push(last)
-  }
-  return out
-}
 
-/**
- * 按 dataZoom 百分比截取 K 线（带 5% 缓冲），减轻副图全量重绘。
- */
-export function sliceKlinesForZoom(
-  klines: KLine[],
-  zoomStart = 0,
-  zoomEnd = 100,
-  maxPoints = SUBCHART_SLICE_THRESHOLD,
-): KLine[] {
-  const n = klines.length
-  if (n <= maxPoints) return klines
-  const from = Math.floor((n * zoomStart) / 100)
-  const to = Math.ceil((n * zoomEnd) / 100)
-  const span = Math.max(1, to - from)
-  const pad = Math.max(5, Math.floor(span * 0.05))
-  const start = Math.max(0, from - pad)
-  const end = Math.min(n, to + pad)
-  const slice = klines.slice(start, end)
-  if (slice.length <= maxPoints) return slice
-  return downsampleKlines(slice, maxPoints)
+  const y = klines.map(typicalPrice)
+  let indices = injectOhlcExtrema(klines, lttbIndices(y, maxPoints))
+
+  if (indices.length > maxPoints) {
+    const subY = indices.map(i => typicalPrice(klines[i]))
+    const picked = lttbIndices(subY, maxPoints)
+    indices = picked.map(p => indices[p])
+  }
+
+  return indices.map(i => klines[i])
 }

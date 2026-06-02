@@ -1,5 +1,5 @@
 /**
- * MACD / SKDJ 与副图 MACDChart.vue、SKDJChart.vue 同源算法，供主图标记与多图对齐。
+ * MACD / SKDJ 与 PC KLineChart 副图、主图标记同源算法。
  */
 import type { KLine } from '../api/stock'
 
@@ -10,6 +10,20 @@ export function calcEMA(data: number[], period: number): number[] {
     ema.push(data[i] * k + ema[i - 1] * (1 - k))
   }
   return ema
+}
+
+/** O(n) 滑动窗口均线 */
+export function calcMA(closes: number[], period: number): (number | null)[] {
+  const out: (number | null)[] = new Array(closes.length).fill(null)
+  if (closes.length < period) return out
+  let windowSum = 0
+  for (let i = 0; i < period; i++) windowSum += closes[i]
+  out[period - 1] = windowSum / period
+  for (let i = period; i < closes.length; i++) {
+    windowSum = windowSum - closes[i - period] + closes[i]
+    out[i] = windowSum / period
+  }
+  return out
 }
 
 export function calcMACD(closes: number[]) {
@@ -165,14 +179,23 @@ function klineNumericSeries(klines: KLine[]) {
 export function computeDualMacdSkdjMarkerIndices(
   klines: KLine[],
   windowBars: number,
-  eps = 1e-9
+  eps = 1e-9,
+  precomputed?: {
+    dif: number[]
+    dea: number[]
+    sk: (number | null)[]
+    sd: (number | null)[]
+  },
 ): { indices: number[]; macdG: number[]; skG: number[]; dates: string[] } {
   const series = klineNumericSeries(klines)
   if (!series || klines.length < 30) return { indices: [], macdG: [], skG: [], dates: [] }
 
   const { closes, highs, lows } = series
-  const { dif, dea } = calcMACD(closes)
-  const { sk, sd } = calcSKDJ(highs, lows, closes)
+  const { dif, dea } = precomputed ?? calcMACD(closes)
+  const skdj = precomputed
+    ? { sk: precomputed.sk, sd: precomputed.sd }
+    : calcSKDJ(highs, lows, closes)
+  const { sk, sd } = skdj
   const macdG = macdGoldCrossIndices(dif, dea)
   const skG = skdjGoldCrossIndices(sk, sd)
   const dates = klines.map(k => k.date.slice(0, 10))
@@ -185,7 +208,6 @@ export function computeDualMacdSkdjMarkerIndices(
   }
 
   const raw = new Set<number>()
-  const debug = []  // 诊断信息
 
   for (const m of macdG) {
     for (const s of skG) {
@@ -196,28 +218,8 @@ export function computeDualMacdSkdjMarkerIndices(
       const macdDead = macdDeathCrossAt(hi, dif, dea, eps)
       const skdjDead = skdjDeathCrossAt(hi, sk, sd, eps)
       const bull = bullish(hi)
-      const shouldMark = !macdDead && !skdjDead && bull
-      debug.push({ m, s, hi, dist, macdDead, skdjDead, bull, shouldMark, difAtHi: dif[hi], deaAtHi: dea[hi], skAtHi: sk[hi], sdAtHi: sd[hi] })
-      if (shouldMark) raw.add(hi)
+      if (!macdDead && !skdjDead && bull) raw.add(hi)
     }
-  }
-
-  if (debug.length) {
-    console.log(
-      '%c[MACD+SKDJ 诊断]',
-      'color:#ffe066;font-weight:700',
-      '\nMACD金叉idx:', macdG.map(i => `${i}(${dates[i]})`).join(', '),
-      '\nSKDJ金叉idx:', skG.map(i => `${i}(${dates[i]})`).join(', '),
-      '\n配对详情:',
-      debug.map(d => {
-        const ok = d.shouldMark ? '✅' : '❌'
-        const reasons = []
-        if (d.macdDead) reasons.push('MACD死叉')
-        if (d.skdjDead) reasons.push('SKDJ死叉')
-        if (!d.bull) reasons.push('非双多头')
-        return `${ok} m=${d.m} s=${d.s} hi=${d.hi}(${dates[d.hi]}) 间距=${d.dist} | ${reasons.length ? reasons.join('+') : '通过'} | DIF=${d.difAtHi?.toFixed(3)} DEA=${d.deaAtHi?.toFixed(3)} SK=${d.skAtHi?.toFixed(1)} SD=${d.sdAtHi?.toFixed(1)}`
-      })
-    )
   }
 
   const sorted = [...raw].sort((a, b) => a - b)

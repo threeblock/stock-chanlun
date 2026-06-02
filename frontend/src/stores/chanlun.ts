@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 import { stockApi, type KLine, type ChanlunResult, type AISignal } from '../api/stock'
 
 export type LevelOption = '1min' | '5min' | '15min' | '30min' | '60min' | 'daily' | 'weekly' | 'monthly'
@@ -54,6 +54,17 @@ function isAbortError(e: unknown): boolean {
   return e instanceof Error && e.name === 'AbortError'
 }
 
+/** 按 YYYY-MM-DD 截取 K 线（chanlun 响应含全量 klines 时客户端筛选） */
+function filterKlinesByDate(klines: KLine[], startDate?: string, endDate?: string): KLine[] {
+  if (!startDate && !endDate) return klines
+  return klines.filter(k => {
+    const d = k.date.slice(0, 10)
+    if (startDate && d < startDate) return false
+    if (endDate && d > endDate) return false
+    return true
+  })
+}
+
 export const useChanlunStore = defineStore('chanlun', () => {
   const klines = ref<KLine[]>([])
   const chanlunResult = ref<ChanlunResult | null>(null)
@@ -71,10 +82,26 @@ export const useChanlunStore = defineStore('chanlun', () => {
   const chanlunUpdatedAt = ref<string | null>(null)
   const aiUpdatedAt = ref<string | null>(null)
 
+  /** 首屏无 K 线时显示图表骨架（chanlun 单请求已含 klines，通常不再单独拉 /kline） */
+  const loadingChart = computed(
+    () => (loadingChanlun.value || loadingKline.value) && klines.value.length === 0,
+  )
+
   let loadSeq = 0
   let klineAbort: AbortController | null = null
   let chanlunAbort: AbortController | null = null
   let aiAbort: AbortController | null = null
+  let settingsSynced = false
+
+  async function syncAiModelFromServer() {
+    if (settingsSynced) return
+    settingsSynced = true
+    try {
+      const res = await stockApi.getSettings()
+      const m = res.data?.ai_model
+      if (m === 'deepseek' || m === 'gemini') aiModel.value = m
+    } catch { /* ignore */ }
+  }
 
   watch(indicators, (val) => {
     try { localStorage.setItem(INDICATOR_KEY, JSON.stringify(val)) } catch { /* ignore */ }
@@ -94,6 +121,7 @@ export const useChanlunStore = defineStore('chanlun', () => {
     startDate?: string,
     endDate?: string,
     seq?: number,
+    force = false,
   ) {
     klineAbort?.abort()
     klineAbort = new AbortController()
@@ -101,7 +129,7 @@ export const useChanlunStore = defineStore('chanlun', () => {
     loadingKline.value = true
     errorKline.value = null
     try {
-      const res = await stockApi.kline(code, level, 500, startDate, endDate, { signal })
+      const res = await stockApi.kline(code, level, 500, startDate, endDate, { signal, force })
       if (seq != null && isStale(seq)) return
       klines.value = res.data.klines || []
       klineUpdatedAt.value = timeNow()
@@ -114,14 +142,14 @@ export const useChanlunStore = defineStore('chanlun', () => {
     }
   }
 
-  async function fetchChanlun(code: string, level: LevelOption = 'daily', seq?: number) {
+  async function fetchChanlun(code: string, level: LevelOption = 'daily', seq?: number, force = false) {
     chanlunAbort?.abort()
     chanlunAbort = new AbortController()
     const signal = chanlunAbort.signal
     loadingChanlun.value = true
     errorChanlun.value = null
     try {
-      const res = await stockApi.chanlun(code, level, { signal })
+      const res = await stockApi.chanlun(code, level, { signal, force })
       if (seq != null && isStale(seq)) return
       chanlunResult.value = res.data
       if (res.data.klines?.length) {
@@ -166,21 +194,28 @@ export const useChanlunStore = defineStore('chanlun', () => {
     }
   }
 
-  async function loadAll(code: string, level: LevelOption = 'daily', startDate?: string, endDate?: string) {
+  async function loadAll(
+    code: string,
+    level: LevelOption = 'daily',
+    startDate?: string,
+    endDate?: string,
+    options?: { force?: boolean },
+  ) {
+    void syncAiModelFromServer()
     const seq = ++loadSeq
+    const force = options?.force ?? false
     currentLevel.value = level
     const hasDateFilter = Boolean(startDate || endDate)
 
-    if (hasDateFilter) {
-      await Promise.all([
-        fetchChanlun(code, level, seq),
-        fetchKline(code, level, startDate, endDate, seq),
-      ])
-    } else {
-      await fetchChanlun(code, level, seq)
-      if (!isStale(seq) && !klines.value.length && !errorChanlun.value) {
-        await fetchKline(code, level, startDate, endDate, seq)
-      }
+    // 优先 /chanlun（含 K 线 + 结构），仅失败或无 klines 时回退 /kline
+    await fetchChanlun(code, level, seq, force)
+
+    if (!isStale(seq) && hasDateFilter && klines.value.length) {
+      klines.value = filterKlinesByDate(klines.value, startDate, endDate)
+    }
+
+    if (!isStale(seq) && !klines.value.length && !errorChanlun.value) {
+      await fetchKline(code, level, startDate, endDate, seq, force)
     }
 
     if (!isStale(seq)) {
@@ -204,7 +239,7 @@ export const useChanlunStore = defineStore('chanlun', () => {
 
   return {
     klines, chanlunResult, aiSignal,
-    loadingKline, loadingChanlun, loadingAI,
+    loadingKline, loadingChanlun, loadingAI, loadingChart,
     errorKline, errorChanlun, errorAI,
     currentLevel, aiModel, indicators,
     klineUpdatedAt, chanlunUpdatedAt, aiUpdatedAt,

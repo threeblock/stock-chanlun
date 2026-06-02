@@ -9,7 +9,8 @@ export const useCommentStore = defineStore('comment', () => {
   const loadingMap = ref<Record<string, boolean>>({})
   const errorMap = ref<Record<string, string>>({})
 
-  async function fetchComments(code: string) {
+  async function fetchComments(code: string, force = false) {
+    if (!force && code in cache.value && !errorMap.value[code]) return
     if (loadingMap.value[code]) return
     loadingMap.value[code] = true
     errorMap.value[code] = ''

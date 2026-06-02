@@ -71,7 +71,7 @@ class LRUCache:
 
 
 # ── 缠论分析结果缓存（5分钟 TTL，最多缓存 256 只股票） ──────────────────────
-chanlun_cache = LRUCache(maxsize=256, ttl=300.0)
+chanlun_cache = LRUCache(maxsize=128, ttl=300.0)
 
 # ── AI 策略信号缓存：规则 90s / LLM 5 分钟 ───────────────────────────────────
 ai_signal_rule_cache = LRUCache(maxsize=128, ttl=90.0)
@@ -205,6 +205,10 @@ class RateLimiter:
         key = self._make_key(identifier)
         with self._lock:
             self._counts.pop(key, None)
+
+    def tracked_key_count(self) -> int:
+        with self._lock:
+            return len(self._counts)
 
 
 # ── 限流：全局限流 + 按客户端 IP（见 deps.check_*）──────────────────────────

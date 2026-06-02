@@ -306,7 +306,7 @@ def get_kline_hist(
     period: daily/weekly/monthly/5/15/30/60 分钟
     adjust: qfq=前复权 hfq=后复权 None=不复权
     """
-    cache_key = f"kline:{code}:{period}:{start_date}:{end_date}:{adjust}"
+    cache_key = f"kline:{code}:{period}:{adjust}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
@@ -1035,27 +1035,54 @@ def get_board_constituents_em(board_name: str) -> dict:
     return out
 
 
+def akshare_cache_stats() -> dict:
+    """内存行情缓存统计（供 /health）。"""
+    with _cache_lock:
+        return {"entries": len(_cache), "max_entries": _CACHE_MAX_ENTRIES}
+
+
 def get_market_overview_bundle() -> dict:
     """聚合：主要指数 + 涨跌家数 + 全部行业板块（供 /api/market/overview）"""
-    indices = {
-        "sh": _normalize_index_row("000001", "上证指数"),
-        "sz": _normalize_index_row("399001", "深证成指"),
-        "cyb": _normalize_index_row("399006", "创业板指"),
-        "kc50": _normalize_index_row("000688", "科创50"),
-        "hs300": _normalize_index_row("399300", "沪深300"),
-        "zz500": _normalize_index_row("000905", "中证500"),
-    }
+    cache_key = "market_overview:bundle:v1"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    index_specs = [
+        ("sh", "000001", "上证指数"),
+        ("sz", "399001", "深证成指"),
+        ("cyb", "399006", "创业板指"),
+        ("kc50", "000688", "科创50"),
+        ("hs300", "399300", "沪深300"),
+        ("zz500", "000905", "中证500"),
+    ]
+    indices: dict = {}
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = {
+            pool.submit(_normalize_index_row, sym, label): key
+            for key, sym, label in index_specs
+        }
+        for future in as_completed(futures):
+            key = futures[future]
+            try:
+                indices[key] = future.result()
+            except Exception:
+                log.debug("指数行情获取失败 key=%s", key, exc_info=True)
+                indices[key] = {}
     breadth = get_a_share_market_breadth()
     all_boards = get_all_industry_boards()
     top5 = all_boards[:5]
     bottom5 = list(reversed(all_boards[-5:]))
-    return {
+    out = {
         "indices": indices,
         "market_breadth": breadth,
         "sectors": all_boards,
         "sectors_top": top5,
         "sectors_bottom": bottom5,
+        "stale": False,
     }
+    _cache_set(cache_key, out, ttl=60)
+    return out
 
 
 def _parse_sina_suggest(text: str) -> list[dict]:
@@ -1583,8 +1610,10 @@ def get_minute_data(code: str, period: str = "5") -> pd.DataFrame:
     if cached is not None:
         return cached
 
-    # 分钟数据使用日K接口的分钟数据
-    return get_kline_hist(code, period=period, adjust="qfq")
+    df = get_kline_hist(code, period=period, adjust="qfq")
+    if not df.empty:
+        _cache_set(cache_key, df, ttl=60)
+    return df
 
 
 # ─── 新浪分钟数据 ─────────────────────────────────────────────────────────────

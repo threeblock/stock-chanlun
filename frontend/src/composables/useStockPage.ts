@@ -5,6 +5,7 @@ import { ref } from 'vue'
 import { stockApi, type Quote, type StockInfoFields, type StockExtras } from '../api/stock'
 import { useChanlunStore, type LevelOption } from '../stores/chanlun'
 import { useCommentStore } from '../stores/comment'
+import { invalidateApiCache } from '../utils/apiCache'
 
 export function useStockPage() {
   const store = useChanlunStore()
@@ -14,11 +15,11 @@ export function useStockPage() {
   const stockInfo = ref<StockInfoFields | null>(null)
   const extras = ref<StockExtras | null>(null)
 
-  async function loadQuoteExtras(code: string) {
+  async function loadQuoteExtras(code: string, force = false) {
     const settled = await Promise.allSettled([
-      stockApi.quote(code),
-      stockApi.info(code),
-      stockApi.extras(code, 8),
+      stockApi.quote(code, { force }),
+      stockApi.info(code, { force }),
+      stockApi.extras(code, 8, { force }),
     ])
     if (settled[0].status === 'fulfilled') quote.value = settled[0].value.data as Quote
     else quote.value = null
@@ -35,17 +36,21 @@ export function useStockPage() {
     level: LevelOption,
     startDate?: string,
     endDate?: string,
+    options?: { force?: boolean },
   ) {
     if (!code) return
-    await store.loadAll(code, level, startDate, endDate)
+    const force = options?.force ?? false
     await Promise.all([
-      loadQuoteExtras(code),
-      commentStore.fetchComments(code),
+      store.loadAll(code, level, startDate, endDate, { force }),
+      loadQuoteExtras(code, force),
+      commentStore.fetchComments(code, force),
     ])
   }
 
   async function changeLevel(code: string, level: LevelOption) {
-    await store.loadAll(code, level)
+    invalidateApiCache(`GET:/chanlun/${code}`)
+    invalidateApiCache(`GET:/stocks/${code}/kline`)
+    await store.loadAll(code, level, undefined, undefined, { force: true })
   }
 
   async function refreshAIStrategy(code: string, options?: { useLlm?: boolean }) {

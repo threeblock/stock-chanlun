@@ -11,6 +11,7 @@ export function emptyMarketOverview(): MarketOverview {
     sectors: [],
     sectors_top: [],
     sectors_bottom: [],
+    stale: false,
   }
 }
 
@@ -46,11 +47,11 @@ export function useHomeDashboard(hotLimit = 20, newsLimit = 8) {
     () => marketLoading.value && hotLoading.value && newsLoading.value,
   )
 
-  async function fetchHot() {
+  async function fetchHot(force = false) {
     hotLoading.value = true
     hotError.value = ''
     try {
-      const res = await stockApi.hotStocks(hotLimit)
+      const res = await stockApi.hotStocks(hotLimit, { force })
       if (res.data.error) {
         hotError.value = res.data.error
         hotStocks.value = []
@@ -65,32 +66,36 @@ export function useHomeDashboard(hotLimit = 20, newsLimit = 8) {
     }
   }
 
-  async function fetchMarket() {
+  async function fetchMarket(force = false) {
     marketLoading.value = true
     marketError.value = ''
     try {
-      const res = await stockApi.marketOverview()
+      const res = await stockApi.marketOverview({ force })
       const d = res.data
+      if (d.stale) {
+        marketError.value = d.error || '大盘数据暂不可用，请稍后重试'
+      }
       marketData.value = {
         indices: d.indices ?? {},
         market_breadth: d.market_breadth ?? { advancers: 0, decliners: 0, unchanged: 0 },
         sectors: d.sectors ?? [],
         sectors_top: d.sectors_top ?? [],
         sectors_bottom: d.sectors_bottom ?? [],
+        stale: d.stale,
       }
     } catch {
       marketError.value = '大盘数据获取失败'
-      marketData.value = emptyMarketOverview()
+      marketData.value = { ...emptyMarketOverview(), stale: true }
     } finally {
       marketLoading.value = false
     }
   }
 
-  async function fetchNews() {
+  async function fetchNews(force = false) {
     newsLoading.value = true
     newsError.value = ''
     try {
-      const res = await stockApi.news(newsLimit)
+      const res = await stockApi.news(newsLimit, { force })
       newsList.value = res.data.items ?? []
     } catch {
       newsError.value = '新闻获取失败'
@@ -99,8 +104,12 @@ export function useHomeDashboard(hotLimit = 20, newsLimit = 8) {
     }
   }
 
-  async function refreshAll() {
-    await Promise.allSettled([fetchHot(), fetchMarket(), fetchNews()])
+  async function refreshAll(force = false) {
+    await Promise.allSettled([
+      fetchHot(force),
+      fetchMarket(force),
+      fetchNews(force),
+    ])
   }
 
   return {

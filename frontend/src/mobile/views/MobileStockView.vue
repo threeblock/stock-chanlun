@@ -1,13 +1,13 @@
 <template>
   <div class="stock-view">
-    <div v-if="loadingAny" class="page-loading">
+    <div v-if="showInitialLoading" class="page-loading">
       <div class="spinner" />
       <span>分析中，请稍候...</span>
     </div>
 
     <div v-else-if="error" class="page-error">
       <p>{{ error }}</p>
-      <button class="btn btn-primary" @click="loadData">重试</button>
+      <button class="btn btn-primary" @click="loadData(true)">重试</button>
     </div>
 
     <template v-else>
@@ -34,7 +34,7 @@
           :indicators="store.indicators"
           :zoom-start="zoomStart"
           :zoom-end="zoomEnd"
-          :loading="store.loadingKline"
+          :loading="store.loadingChart"
           @zoom-change="onZoomChange"
         />
       </div>
@@ -91,7 +91,7 @@
         >
           {{ store.loadingAI ? '分析中…' : 'LLM深度' }}
         </button>
-        <button class="btn btn-ghost" @click="loadData" :disabled="loadingAny">
+        <button class="btn btn-ghost" @click="loadData(true)" :disabled="loadingAny">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
@@ -118,9 +118,10 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useDebouncedCallback } from '@/composables/useDebounce'
 import { useRoute } from 'vue-router'
 import type { LevelOption } from '@/stores/chanlun'
-import { stockApi } from '@/api/stock'
+import { useWatchlistStore } from '@/stores/watchlist'
 import type { Quote } from '@/api/stock'
 import toast from '@/composables/useToast'
 import { useStockPage } from '@/composables/useStockPage'
@@ -130,21 +131,28 @@ import MobileIndicatorSelector from '../components/MobileIndicatorSelector.vue'
 
 const route = useRoute()
 const { store, quote, stockInfo, loadStock, changeLevel: changeLevelBase, refreshAIStrategy } = useStockPage()
+const watchlistStore = useWatchlistStore()
 
 const zoomStart = ref(0)
 const zoomEnd = ref(100)
 const showSheet = ref(false)
 const signalsExpanded = ref(false)
-const isWatching = ref(false)
 
-function onZoomChange(s: number, e: number) {
+const isWatching = computed(() =>
+  watchlistStore.stocks.some(s => s.code === stockCode.value),
+)
+
+const onZoomChange = useDebouncedCallback((s: number, e: number) => {
   zoomStart.value = s
   zoomEnd.value = e
-}
+}, 80)
 
 const stockCode = computed(() => route.params.code as string)
 const currentLevel = computed(() => store.currentLevel)
 const loadingAny = computed(() => store.loadingKline || store.loadingChanlun)
+const showInitialLoading = computed(
+  () => loadingAny.value && !store.klines.length && !store.chanlunResult,
+)
 const error = computed(() =>
   store.errorKline || store.errorChanlun
 )
@@ -212,8 +220,8 @@ async function changeLevel(level: LevelOption) {
   await changeLevelBase(stockCode.value, level)
 }
 
-async function loadData() {
-  await loadStock(stockCode.value, currentLevel.value)
+async function loadData(force = false) {
+  await loadStock(stockCode.value, currentLevel.value, undefined, undefined, { force })
 }
 
 async function onDeepAnalyze() {
@@ -226,18 +234,23 @@ async function onDeepAnalyze() {
 }
 
 async function toggleWatch() {
-  if (isWatching.value) {
-    await stockApi.removeWatch(stockCode.value)
-    isWatching.value = false
-    toast.info('已从自选股移除')
-  } else {
-    await stockApi.addWatch(stockCode.value)
-    isWatching.value = true
-    toast.success('已添加到自选股')
+  try {
+    if (isWatching.value) {
+      await watchlistStore.removeStock(stockCode.value)
+      toast.info('已从自选股移除')
+    } else {
+      await watchlistStore.addStock(stockCode.value)
+      toast.success('已添加到自选股')
+    }
+  } catch (e: unknown) {
+    toast.error(e instanceof Error ? e.message : '操作失败')
   }
 }
 
-onMounted(loadData)
+onMounted(() => {
+  void watchlistStore.fetchWatchlist()
+  loadData()
+})
 watch(() => route.params.code, () => { signalsExpanded.value = false; loadData() })
 </script>
 

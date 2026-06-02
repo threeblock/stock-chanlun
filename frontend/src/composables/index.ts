@@ -29,5 +29,8 @@ export { useHomeDashboard, emptyMarketOverview, formatNewsTime } from './useHome
 // 个股页数据加载
 export { useStockPage } from './useStockPage'
 
+// K 线副图指标（MACD/RSI/SKDJ 一次计算）
+export { useKlineIndicators } from './useKlineIndicators'
+
 // 全局 Loading
 export { useLoading, globalLoading } from './useLoading'

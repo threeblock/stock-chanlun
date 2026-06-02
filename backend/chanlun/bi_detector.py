@@ -1,6 +1,7 @@
 """
 笔检测器 — 基于分型识别笔
 """
+import numpy as np
 import pandas as pd
 from typing import Optional
 from datetime import datetime
@@ -18,8 +19,14 @@ class BiDetector:
 
     def __init__(self, klines: pd.DataFrame):
         self.klines = klines.reset_index(drop=True)
+        self._date_values = self.klines["date"].values
         self._fenxing_detector = FenxingDetector(klines)
         self._fenxings: list[Fenxing] = []
+
+    @property
+    def processed_klines(self) -> pd.DataFrame:
+        """包含关系处理后的 K 线（与笔/分型检测一致）。"""
+        return self._fenxing_detector.klines
 
     @staticmethod
     def compress_fenxings(fenxings: list[Fenxing]) -> list[Fenxing]:
@@ -98,6 +105,8 @@ class BiDetector:
         return bis
 
     def _count_klines_between(self, start: datetime, end: datetime) -> int:
-        """计算两个时间之间的K线数量"""
-        mask = (self.klines['date'] >= start) & (self.klines['date'] <= end)
-        return int(mask.sum())
+        """计算两个时间之间的K线数量（searchsorted，避免全表布尔掩码）"""
+        dates = self._date_values
+        left = int(np.searchsorted(dates, start, side="left"))
+        right = int(np.searchsorted(dates, end, side="right"))
+        return max(0, right - left)

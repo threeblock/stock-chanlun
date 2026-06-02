@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+
 from services.akshare_service import normalize_stock_code
 from stores.local_json import (
     comments_add,
@@ -15,6 +17,10 @@ from stores.local_json import (
 router = APIRouter()
 
 
+class CommentBody(BaseModel):
+    content: str = Field(..., min_length=1, max_length=8000)
+
+
 @router.get("/api/comments/{stock_code}", tags=["评论"])
 def get_comments(stock_code: str):
     sym, _ = normalize_stock_code(stock_code)
@@ -24,13 +30,13 @@ def get_comments(stock_code: str):
 
 
 @router.post("/api/comments/{stock_code}", tags=["评论"])
-def add_comment(stock_code: str, comment_in: dict):
+def add_comment(stock_code: str, comment_in: CommentBody):
     sym, _ = normalize_stock_code(stock_code)
-    content = (comment_in.get("content") or "").strip()
+    content = comment_in.content.strip()
     if not content:
         raise HTTPException(status_code=400, detail="笔记内容不能为空")
 
-    now = datetime.utcnow().isoformat() + "Z"
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     comment = {
         "id": str(uuid.uuid4()),
         "stockCode": sym,
@@ -43,13 +49,13 @@ def add_comment(stock_code: str, comment_in: dict):
 
 
 @router.put("/api/comments/{stock_code}/{comment_id}", tags=["评论"])
-def update_comment(stock_code: str, comment_id: str, comment_in: dict):
+def update_comment(stock_code: str, comment_id: str, comment_in: CommentBody):
     sym, _ = normalize_stock_code(stock_code)
-    content = (comment_in.get("content") or "").strip()
+    content = comment_in.content.strip()
     if not content:
         raise HTTPException(status_code=400, detail="笔记内容不能为空")
 
-    updated = datetime.utcnow().isoformat() + "Z"
+    updated = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     if not comments_update(sym, comment_id, content, updated):
         raise HTTPException(status_code=404, detail="笔记不存在")
     for c in comments_get(sym):

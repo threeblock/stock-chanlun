@@ -214,7 +214,7 @@
                   >{{ b.change_pct >= 0 ? '+' : '' }}{{ b.change_pct.toFixed(2) }}%</span>
                 </div>
               </div>
-              <p v-else class="hot-boards-empty" @click="fetchMarket" role="button" tabindex="0" @keydown.enter="fetchMarket">
+              <p v-else class="hot-boards-empty" @click="() => fetchMarket(true)" role="button" tabindex="0" @keydown.enter="() => fetchMarket(true)">
                 暂无板块数据（点击重试）
               </p>
             </div>
@@ -279,7 +279,7 @@
           </div>
 
           <p v-else class="panel-err">{{ marketError }}
-            <button class="retry-btn" @click="fetchMarket">重试</button>
+            <button class="retry-btn" @click="() => fetchMarket(true)">重试</button>
           </p>
         </section>
 
@@ -320,7 +320,7 @@
           </div>
 
           <p v-else-if="hotError" class="panel-err">{{ hotError }}
-            <button class="retry-btn" @click="fetchHot">重试</button>
+            <button class="retry-btn" @click="() => fetchHot(true)">重试</button>
           </p>
           <p v-else class="panel-hint">暂无数据</p>
         </section>
@@ -364,7 +364,7 @@
         </div>
 
         <p v-else-if="newsError" class="panel-err">{{ newsError }}
-          <button class="retry-btn" @click="fetchNews">重试</button>
+          <button class="retry-btn" @click="() => fetchNews(true)">重试</button>
         </p>
         <p v-else class="panel-hint">暂无新闻</p>
       </section>
@@ -552,7 +552,7 @@ const { stop: stopAutoRefresh } = useVisibilityRefresh(
 )
 
 onMounted(async () => {
-  await refreshAll()
+  await refreshAll(true)
   window.addEventListener('keydown', handleGlobalKey)
 })
 

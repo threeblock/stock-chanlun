@@ -178,7 +178,7 @@ function go(path: string) {
 useVisibilityRefresh(() => refreshAll(), AUTO_REFRESH_INTERVAL)
 
 onMounted(async () => {
-  await refreshAll()
+  await refreshAll(true)
 })
 </script>
 

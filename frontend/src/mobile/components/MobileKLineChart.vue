@@ -46,14 +46,21 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, watch, onMounted, onUnmounted, nextTick, computed } from 'vue'
 import echarts from '../../utils/echarts'
 import type { KLine, Bi, XiangSegment, Zhongshu, Signal, AISignal, SupportResistance } from '@/api/stock'
 import type { IndicatorConfig } from '@/stores/chanlun'
-import { calcMACD, calcSKDJ, calcRSI, computeDualMacdSkdjMarkerIndices } from '@/utils/stockIndicators'
-import { simplifySupportResistanceLevels } from '@/utils/chartOverlayUtils'
+import { calcMA, computeDualMacdSkdjMarkerIndices } from '@/utils/stockIndicators'
 import { downsampleKlines } from '@/utils/chartDownsample'
 import { useDebouncedCallback } from '@/composables/useDebounce'
+import { useKlineIndicators } from '@/composables/useKlineIndicators'
+import {
+  type ChanlunOverlayPayload,
+  CHANLUN_OVERLAY_THEME_MOBILE,
+  buildChanlunGraphicChildren,
+  buildChanlunOverlayCache,
+  resolveDataZoomViewRange,
+} from '@/utils/chartOverlayCore'
 
 const LONG_PRESS_DELAY = 400
 const SWIPE_THRESHOLD = 50
@@ -77,6 +84,10 @@ const emit = defineEmits<{ 'zoomChange': [start: number, end: number] }>()
 const chartRef = ref<HTMLDivElement | null>(null)
 const barInfoText = ref('')
 let chart: echarts.ECharts | null = null
+
+const displayKlines = computed(() => downsampleKlines(props.klines))
+const klineIndicators = useKlineIndicators(displayKlines)
+
 let graphicRaf = 0
 let resizeObserver: ResizeObserver | null = null
 let longPressTimer: ReturnType<typeof setTimeout> | null = null
@@ -87,7 +98,6 @@ let isScrolling = false
 let touchCount = 0
 
 type DataZoomOption = { startValue?: number; endValue?: number; start?: number; end?: number }
-type GraphicElement = Record<string, unknown>
 
 // ── 指标配置 ────────────────────────────────────────────────────────────────
 function getIndicators(): Required<IndicatorConfig> {
@@ -100,55 +110,9 @@ function getIndicators(): Required<IndicatorConfig> {
   }
 }
 
-// ── 日期处理 ────────────────────────────────────────────────────────────────
-function normDay(s: string): string {
-  return s.replace('T', ' ').trim().slice(0, 10)
-}
-
-function dateToIdxRobust(d: string, dates: string[]): number {
-  const key = normDay(d)
-  let i = dates.indexOf(key)
-  if (i >= 0) return i
-  const t = Date.parse(key.replace(/-/g, '/'))
-  if (Number.isNaN(t)) return -1
-  let best = -1, bestDiff = Infinity
-  for (let j = 0; j < dates.length; j++) {
-    const tj = Date.parse(dates[j].replace(/-/g, '/'))
-    if (Number.isNaN(tj)) continue
-    const diff = Math.abs(tj - t)
-    if (diff < bestDiff) { bestDiff = diff; best = j }
-  }
-  return best
-}
-
-function resolveBarRange(start: string, end: string, n: number, dates: string[]): [number, number] | null {
-  if (n <= 0) return null
-  let s = dateToIdxRobust(start, dates)
-  let e = dateToIdxRobust(end, dates)
-  if (s < 0 && e < 0) return null
-  if (s < 0) s = 0
-  if (e < 0) e = n - 1
-  if (s > e) [s, e] = [e, s]
-  s = Math.max(0, Math.min(n - 1, s))
-  e = Math.max(0, Math.min(n - 1, e))
-  if (s > e) return null
-  return [s, e]
-}
-
-// ── 均线计算 ────────────────────────────────────────────────────────────────
-function calcMA(closes: number[], period: number): (number | null)[] {
-  const out: (number | null)[] = []
-  for (let i = 0; i < closes.length; i++) {
-    if (i < period - 1) { out.push(null); continue }
-    let s = 0
-    for (let j = 0; j < period; j++) s += closes[i - j]
-    out.push(s / period)
-  }
-  return out
-}
-
 // ── 缓存 ────────────────────────────────────────────────────────────────────
 let lastDates: string[] = []
+let lastDisplayKlines: KLine[] = []
 let lastMa5: (number | null)[] = []
 let lastMa20: (number | null)[] = []
 let lastMa60: (number | null)[] = []
@@ -159,15 +123,15 @@ function fmtPrice(v: number | null | undefined): string {
 }
 
 function formatBarLine(idx: number): string {
-  if (idx < 0 || idx >= props.klines.length) return ''
-  const k = props.klines[idx]
+  if (idx < 0 || idx >= lastDisplayKlines.length) return ''
+  const k = lastDisplayKlines[idx]
   const d = lastDates[idx] ?? k.date.slice(0, 10)
   return `${d}  开 ${fmtPrice(k.open)}  收 ${fmtPrice(k.close)}  高 ${fmtPrice(k.high)}  低 ${fmtPrice(k.low)}  |  MA5 ${fmtPrice(lastMa5[idx])}  MA20 ${fmtPrice(lastMa20[idx])}  MA60 ${fmtPrice(lastMa60[idx])}`
 }
 
 function setBarInfoByIndex(idx: number) {
-  if (!props.klines.length) { barInfoText.value = ''; return }
-  const i = Math.max(0, Math.min(idx, props.klines.length - 1))
+  if (!lastDisplayKlines.length) { barInfoText.value = ''; return }
+  const i = Math.max(0, Math.min(idx, lastDisplayKlines.length - 1))
   barInfoText.value = formatBarLine(i)
 }
 
@@ -202,53 +166,42 @@ function getGridBounds(): [number, number] {
 }
 
 // ── 缠论 Overlay ─────────────────────────────────────────────────────────────
-type OverlayData = {
-  bis: (Bi & { _s: number; _e: number })[]
-  xiangs: (XiangSegment & { _s: number; _e: number })[]
-  zhongshus: (Zhongshu & { _s: number; _e: number })[]
-  signals: (Signal & { _idx: number })[]
-  supportResistance: SupportResistance[]
-  dualCrossIndices: number[]
-  aiSignal: AISignal | null
-  _n: number
-}
-let overlayCache: OverlayData | null = null
+let overlayCache: ChanlunOverlayPayload | null = null
 
-function buildOverlayData(): OverlayData {
-  const dates = lastDates
-  const n = dates.length
+function buildOverlayData(): ChanlunOverlayPayload {
   const ind = getIndicators()
-  const refPx = props.klines.length ? props.klines[props.klines.length - 1].close : 1
+  const indData = klineIndicators.value
+  const chartKlines = lastDisplayKlines
 
-  const dualCrossIndices =
-    props.klines.length >= 30 && ind.macd && ind.skdj
-      ? computeDualMacdSkdjMarkerIndices(props.klines, 3).indices
-      : []
-
-  return {
-    bis: ind.bis ? props.bis.flatMap(b => {
-      const r = resolveBarRange(b.start, b.end, n, dates)
-      return r ? [{ ...b, _s: r[0], _e: r[1] }] : []
-    }) : [],
-    xiangs: (ind.xiangs && props.xiangs) ? props.xiangs.flatMap(x => {
-      const r = resolveBarRange(x.start, x.end, n, dates)
-      return r ? [{ ...x, _s: r[0], _e: r[1] }] : []
-    }) : [],
-    zhongshus: ind.zhongshus ? props.zhongshus.flatMap(z => {
-      const r = resolveBarRange(z.start, z.end, n, dates)
-      return r ? [{ ...z, _s: r[0], _e: r[1] }] : []
-    }) : [],
-    signals: ind.signals ? props.signals.flatMap(s => {
-      const ix = dateToIdxRobust(s.datetime, dates)
-      return ix >= 0 ? [{ ...s, _idx: ix }] : []
-    }) : [],
-    supportResistance: ind.supportResistance
-      ? simplifySupportResistanceLevels(props.supportResistance || [], refPx)
-      : [],
-    dualCrossIndices,
-    aiSignal: ind.aiLines ? (props.aiSignal ?? null) : null,
-    _n: n,
+  let dualCrossIndices: number[] = []
+  if (chartKlines.length >= 30 && ind.macd && ind.skdj && indData.macd && indData.sk && indData.sd) {
+    dualCrossIndices = computeDualMacdSkdjMarkerIndices(chartKlines, 3, 1e-9, {
+      dif: indData.macd.dif,
+      dea: indData.macd.dea,
+      sk: indData.sk,
+      sd: indData.sd,
+    }).indices
   }
+
+  return buildChanlunOverlayCache({
+    dates: lastDates,
+    seriesKlines: chartKlines,
+    bis: props.bis,
+    xiangs: props.xiangs,
+    zhongshus: props.zhongshus,
+    signals: props.signals,
+    aiSignal: props.aiSignal,
+    supportResistance: props.supportResistance,
+    flags: {
+      bis: ind.bis,
+      xiangs: ind.xiangs,
+      zhongshus: ind.zhongshus,
+      signals: ind.signals,
+      aiLines: ind.aiLines,
+      supportResistance: ind.supportResistance,
+    },
+    dualCrossIndices,
+  })
 }
 
 function applyGraphicOverlay() {
@@ -260,139 +213,19 @@ function applyGraphicOverlay() {
   }
 
   const opt = chart.getOption() as { dataZoom?: DataZoomOption[] }
-  const dz0 = opt?.dataZoom?.[0]
-  const vStart = dz0?.startValue ?? 0
-  const vEnd = dz0?.endValue ?? (lastDates.length - 1)
-  const viewS = Math.max(0, Math.min(Number(vStart) || 0, lastDates.length - 1))
-  const viewE = Math.max(viewS, Math.min(Number(vEnd) || (lastDates.length - 1), lastDates.length - 1))
-
-  const pixelCache = new Map<string, [number, number] | null>()
-  const pixelAtIdxCached = (i: number, price: number): [number, number] | null => {
-    const key = `${i}:${price}`
-    if (pixelCache.has(key)) return pixelCache.get(key) ?? null
-    const pt = pixelAtIdx(i, price)
-    pixelCache.set(key, pt)
-    return pt
-  }
-
-  const children: GraphicElement[] = []
+  const { viewS, viewE } = resolveDataZoomViewRange(lastDates.length, opt?.dataZoom)
   const [gridLeft, gridRight] = getGridBounds()
 
-  // ── 中枢 ────────────────────────────────────────────────────────
-  for (const zs of data.zhongshus) {
-    if (zs._e < viewS || zs._s > viewE) continue
-    if (zs._e < zs._s) continue
-    const a = pixelAtIdxCached(zs._s, zs.range_high)
-    const b = pixelAtIdxCached(zs._e, zs.range_low)
-    if (!a || !b) continue
-    const xPx1 = Math.min(a[0], b[0])
-    const xPx2 = Math.max(a[0], b[0])
-    const yPx1 = Math.min(a[1], b[1])
-    const yPx2 = Math.max(a[1], b[1])
-    children.push({ type: 'rect', x: xPx1, y: yPx1,
-      width: Math.max(xPx2 - xPx1, 4), height: Math.max(yPx2 - yPx1, 1),
-      style: { fill: 'rgba(188, 140, 255, 0.06)', stroke: 'rgba(188, 140, 255, 0.42)', lineWidth: 1, lineDash: [5, 4] },
-      z: 100, silent: true })
-    children.push({ type: 'text', style: { text: zs.range_high.toFixed(2), fill: 'rgba(188, 140, 255, 0.8)', fontSize: 9, fontFamily: 'monospace' },
-      x: xPx1 + 3, y: yPx1 + 11, z: 101, silent: true })
-    children.push({ type: 'text', style: { text: zs.range_low.toFixed(2), fill: 'rgba(188, 140, 255, 0.8)', fontSize: 9, fontFamily: 'monospace' },
-      x: xPx1 + 3, y: yPx2 - 2, z: 101, silent: true })
-  }
-
-  // ── 笔 ─────────────────────────────────────────────────────────
-  for (const bi of data.bis) {
-    if (bi._e < viewS || bi._s > viewE) continue
-    if (bi._e < bi._s) continue
-    const p1 = pixelAtIdxCached(bi._s, bi.start_price ?? (bi.direction === 'up' ? bi.low : bi.high))
-    const p2 = pixelAtIdxCached(bi._e, bi.end_price ?? (bi.direction === 'up' ? bi.high : bi.low))
-    if (!p1 || !p2) continue
-    const color = bi.direction === 'up' ? UP_COLOR : DOWN_COLOR
-    children.push({ type: 'line', shape: { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1] },
-      style: { stroke: color, lineWidth: 1.25, opacity: 0.52 }, z: 102, silent: true })
-    children.push({ type: 'circle', shape: { cx: p1[0], cy: p1[1], r: 2 },
-      style: { fill: color, stroke: '#06080c', lineWidth: 0.8 }, z: 103, silent: true })
-    children.push({ type: 'circle', shape: { cx: p2[0], cy: p2[1], r: 2 },
-      style: { fill: color, stroke: '#06080c', lineWidth: 1 }, z: 103, silent: true })
-  }
-
-  // ── 线段 ───────────────────────────────────────────────────────
-  for (const xiang of data.xiangs) {
-    if (xiang._e < viewS || xiang._s > viewE) continue
-    if (xiang._e < xiang._s) continue
-    const p1 = pixelAtIdxCached(
-      xiang._s,
-      xiang.start_price ?? (xiang.direction === 'up' ? xiang.low : xiang.high)
-    )
-    const p2 = pixelAtIdxCached(
-      xiang._e,
-      xiang.end_price ?? (xiang.direction === 'up' ? xiang.high : xiang.low)
-    )
-    if (!p1 || !p2) continue
-    const color = xiang.direction === 'up' ? '#ffe066' : '#ff9f7f'
-    children.push({ type: 'line', shape: { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1] },
-      style: { stroke: color, lineWidth: 2, opacity: 0.38 }, z: 101, silent: true })
-  }
-
-  // ── 买卖点 ──────────────────────────────────────────────────────
-  const buyColors: Record<string, string> = { '一买': DOWN_COLOR, '二买': '#38bdf8', '三买': '#f59e0b' }
-  const sellColors: Record<string, string> = { '一卖': UP_COLOR, '二卖': '#ff7b72', '三卖': '#da3633' }
-  for (const sig of data.signals) {
-    if (sig._idx < viewS || sig._idx > viewE) continue
-    const pt = pixelAtIdxCached(sig._idx, sig.price)
-    if (!pt) continue
-    const color = buyColors[sig.type] || sellColors[sig.type] || '#f59e0b'
-    const isBuy = sig.type.includes('买')
-    const r = 7
-    children.push({ type: 'circle', shape: { cx: pt[0], cy: pt[1], r },
-      style: { fill: color, stroke: '#06080c', lineWidth: 2 }, z: 103, silent: true })
-    children.push({ type: 'text', style: { text: sig.type, fill: color, fontSize: 10, fontWeight: 700, textAlign: 'center' },
-      x: pt[0], y: pt[1] + (isBuy ? -(r + 12) : r + 12), z: 104, silent: true })
-  }
-
-  // ── 支撑阻力线 ──────────────────────────────────────────────────
-  for (const lvl of data.supportResistance) {
-    const yp = pixelAtIdxCached(viewS, lvl.price)?.[1]
-    if (yp == null || !Number.isFinite(yp)) continue
-    const isSupport = lvl.type === 'support'
-    const color = isSupport ? DOWN_COLOR : UP_COLOR
-    const dash = isSupport ? [6, 4] : [8, 4]
-    const label = isSupport ? `撑 ${lvl.price.toFixed(2)}` : `阻 ${lvl.price.toFixed(2)}`
-    const strength = lvl.strength ?? 0.5
-    const lw = 0.55 + strength * 0.45
-    children.push({ type: 'line', shape: { x1: gridLeft, y1: yp, x2: gridRight, y2: yp },
-      style: { stroke: color, lineWidth: lw, opacity: 0.22 + strength * 0.28, lineDash: dash },
-      z: 98, silent: true })
-    children.push({ type: 'text', style: { text: label, fill: color, fontSize: 8, opacity: 0.45 + strength * 0.35 },
-      x: gridLeft + 4, y: yp - 4, z: 99, silent: true })
-  }
-
-  // ── AI 信号线 ──────────────────────────────────────────────────
-  if (data.aiSignal) {
-    const ai = data.aiSignal
-    const entryColor = ai.direction === '买入' ? DOWN_COLOR : UP_COLOR
-    const hLine = (price: number, stroke: string, dash: number[], lw: number, label: string) => {
-      const yp = pixelAtIdxCached(viewS, price)?.[1]
-      if (yp == null) return
-      children.push({ type: 'line', shape: { x1: gridLeft, y1: yp, x2: gridRight, y2: yp },
-        style: { stroke, lineWidth: lw, opacity: 0.8, lineDash: dash }, z: 99, silent: true })
-      children.push({ type: 'text', style: { text: label, fill: stroke, fontSize: 10, fontWeight: 700 },
-        x: gridLeft + 6, y: yp - 5, z: 104, silent: true })
-    }
-    if (ai.entry_price != null) hLine(ai.entry_price, entryColor, [7, 4], 1.5, `入场 ${ai.entry_price.toFixed(2)}`)
-    if (ai.stop_loss != null) hLine(ai.stop_loss, UP_COLOR, [3, 3], 1.2, `止损 ${ai.stop_loss.toFixed(2)}`)
-    if (ai.take_profit != null) hLine(ai.take_profit, DOWN_COLOR, [3, 3], 1.2, `止盈 ${ai.take_profit.toFixed(2)}`)
-  }
-
-  // ── MACD+SKDJ 双金叉标记 ─────────────────────────────────────────
-  for (const idx of data.dualCrossIndices) {
-    if (idx < viewS || idx > viewE) continue
-    const pt = pixelAtIdxCached(idx, props.klines[idx].close)
-    if (!pt) continue
-    children.push({ type: 'circle', shape: { cx: pt[0], cy: pt[1], r: 5 },
-      style: { fill: 'rgba(255,224,102,0.85)', stroke: '#06080c', lineWidth: 1.5 }, z: 105, silent: true })
-    children.push({ type: 'text', style: { text: '共振', fill: '#e6c355', fontSize: 8, fontWeight: 600, textAlign: 'center' },
-      x: pt[0], y: pt[1] - 9, z: 106, silent: true })
-  }
+  const children = buildChanlunGraphicChildren({
+    data,
+    viewS,
+    viewE,
+    gridLeft,
+    gridRight,
+    pixelAtIdx,
+    theme: CHANLUN_OVERLAY_THEME_MOBILE,
+    priceAtIdx: i => lastDisplayKlines[i]?.close ?? 0,
+  })
 
   chart.setOption({
     graphic: [{ id: 'chanlun-overlay', type: 'group', children, z: 100, silent: true }]
@@ -410,13 +243,15 @@ function queueGraphic() {
 
 // ── 构建 ECharts Option ───────────────────────────────────────────────────────
 function buildOption(chartH: number = 300) {
-  const klines = downsampleKlines(props.klines)
+  const klines = displayKlines.value
   if (!klines.length) return {}
 
+  lastDisplayKlines = klines
   const dates = klines.map(k => k.date.slice(0, 10))
   const ohlc = klines.map(k => [k.open, k.close, k.low, k.high])
   const closes = klines.map(k => k.close)
   const ind = getIndicators()
+  const indData = klineIndicators.value
   const zoomStart = props.zoomStart ?? 0
   const zoomEnd = props.zoomEnd ?? 100
 
@@ -425,14 +260,9 @@ function buildOption(chartH: number = 300) {
   lastMa20 = ind.ma20 ? calcMA(closes, 20) : []
   lastMa60 = ind.ma60 ? calcMA(closes, 60) : []
 
-  // 副图计算
-  const macdData = calcMACD(closes)
-  const skdjData = calcSKDJ(
-    klines.map(k => k.high),
-    klines.map(k => k.low),
-    closes
-  )
-  const rsiData = calcRSI(closes)
+  const macdData = indData.macd
+  const skdjData = indData.sk && indData.sd ? { sk: indData.sk, sd: indData.sd } : null
+  const rsiData = indData.rsi
 
   // 副图开关
   const subCount = [ind.volume, ind.macd, ind.rsi, ind.skdj].filter(Boolean).length
@@ -486,21 +316,24 @@ function buildOption(chartH: number = 300) {
       itemStyle: { color: klines[i].close >= klines[i].open ? UP_COLOR + '66' : DOWN_COLOR + '66' }
     }) },
     { key: 'macd' as const, label: 'MACD', color: '#38bdf8', calc: (i: number) => ({
-      value: macdData.dif[i],
-      itemStyle: { color: macdData.dif[i] >= 0 ? UP_COLOR : DOWN_COLOR }
+      value: macdData!.dif[i],
+      itemStyle: { color: macdData!.dif[i] >= 0 ? UP_COLOR : DOWN_COLOR }
     }) },
     { key: 'rsi' as const, label: 'RSI', color: '#f59e0b', calc: (i: number) => ({
-      value: rsiData.rsi[i] ?? null,
+      value: rsiData![i] ?? null,
       itemStyle: {}
     }) },
     { key: 'skdj' as const, label: 'SKDJ', color: '#a78bfa', calc: (i: number) => ({
-      value: skdjData.sk[i] ?? null,
+      value: skdjData!.sk[i] ?? null,
       itemStyle: {}
     }) },
   ]
 
   for (const def of subDef) {
     if (!ind[def.key]) continue
+    if (def.key === 'macd' && !macdData) continue
+    if (def.key === 'rsi' && !rsiData) continue
+    if (def.key === 'skdj' && !skdjData) continue
     const bottom = subCount * subHeight + (subIdx - 1) * (subHeight + gap) + 4
     grids.push({ left: 8, right: 8, top: mainH + (subIdx - 1) * (subHeight + gap) + gap, height: subHeight, bottom: undefined })
 
@@ -525,23 +358,25 @@ function buildOption(chartH: number = 300) {
         barMaxWidth: 6,
       })
     } else if (def.key === 'macd') {
+      const macd = macdData!
       seriesList.push({ name: 'MACD', type: 'bar', data: klines.map((_, i) => def.calc(i)),
         xAxisIndex: subIdx, yAxisIndex: subIdx, barMaxWidth: 4 })
-      seriesList.push({ name: 'DIF', type: 'line', data: macdData.dif,
+      seriesList.push({ name: 'DIF', type: 'line', data: macd.dif,
         xAxisIndex: subIdx, yAxisIndex: subIdx,
         lineStyle: { width: 1, color: '#38bdf8' }, symbol: 'none', smooth: true, z: 5 })
-      seriesList.push({ name: 'DEA', type: 'line', data: macdData.dea,
+      seriesList.push({ name: 'DEA', type: 'line', data: macd.dea,
         xAxisIndex: subIdx, yAxisIndex: subIdx,
         lineStyle: { width: 1, color: '#f59e0b' }, symbol: 'none', smooth: true, z: 5 })
     } else if (def.key === 'rsi') {
-      seriesList.push({ name: 'RSI', type: 'line', data: rsiData.rsi,
+      seriesList.push({ name: 'RSI', type: 'line', data: rsiData,
         xAxisIndex: subIdx, yAxisIndex: subIdx,
         lineStyle: { width: 1.2, color: def.color }, symbol: 'none', smooth: true, z: 5 })
     } else {
-      seriesList.push({ name: 'K', type: 'line', data: skdjData.sk,
+      const skdj = skdjData!
+      seriesList.push({ name: 'K', type: 'line', data: skdj.sk,
         xAxisIndex: subIdx, yAxisIndex: subIdx,
         lineStyle: { width: 1.2, color: def.color }, symbol: 'none', smooth: true, z: 5 })
-      seriesList.push({ name: 'D', type: 'line', data: skdjData.sd,
+      seriesList.push({ name: 'D', type: 'line', data: skdj.sd,
         xAxisIndex: subIdx, yAxisIndex: subIdx,
         lineStyle: { width: 1, color: '#f59e0b', type: 'dashed' }, symbol: 'none', smooth: true, z: 5 })
     }

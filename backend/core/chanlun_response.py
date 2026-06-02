@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from chanlun.elements import ChanlunAnalysis
+from core.chanlun_analysis import level_to_period
 
 
 def serialize_chanlun_analysis(result: ChanlunAnalysis) -> dict:
@@ -17,9 +18,16 @@ def serialize_chanlun_analysis(result: ChanlunAnalysis) -> dict:
         }
         for k in result.klines
     ]
+    period = level_to_period(result.level)
+    data_period_note = (
+        "5min"
+        if result.level == "1min"
+        else period
+    )
     return {
         "stock_code": result.stock_code,
         "level": result.level,
+        "data_period": data_period_note,
         "trend": result.trend,
         "summary": result.summary,
         "klines": klines,

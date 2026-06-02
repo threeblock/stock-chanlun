@@ -16,7 +16,7 @@ from fastapi.responses import StreamingResponse
 from core.chanlun_analysis import level_to_period
 from core.kline_serialize import df_to_kline_dicts
 from core.numbers import finite_float
-from deps import check_kline_rate_limits, client_ip
+from deps import check_kline_rate_limits, check_screening_rate_limits, client_ip
 from services.akshare_service import (
     get_board_constituents_em,
     get_daily_hot_stocks,
@@ -65,6 +65,7 @@ async def hot_stocks(limit: int = Query(15, ge=1, le=50)):
 
 @router.get("/api/stocks/screen", tags=["选股"])
 async def screen_stocks_api(
+    request: Request,
     change_pct_min: Optional[float] = Query(None, description="最小涨跌幅（%）"),
     change_pct_max: Optional[float] = Query(None, description="最大涨跌幅（%）"),
     volume_min: Optional[float] = Query(None, description="最小成交量（手）"),
@@ -80,6 +81,7 @@ async def screen_stocks_api(
     ),
     pool_size: int = Query(100, ge=10, le=1000, description="候选池大小（最高 1000）"),
 ):
+    check_screening_rate_limits(client_ip(request))
     from services.screening_service import screen_stocks
 
     signal_types: list[str] | None = None
@@ -126,6 +128,7 @@ def screen_stocks_stream_api(
     pool_size: int = Query(100, ge=10, le=1000, description="候选池大小（最高 1000）"),
     max_results: int = Query(50, ge=1, le=200, description="最多返回条数"),
 ):
+    check_screening_rate_limits(client_ip(request))
     from services.screening_service import screen_stocks_stream
 
     signal_types: list[str] | None = None
@@ -190,6 +193,8 @@ async def market_overview():
                 "sectors": [],
                 "sectors_top": [],
                 "sectors_bottom": [],
+                "stale": True,
+                "error": str(e),
             }
 
     return await asyncio.to_thread(_run)

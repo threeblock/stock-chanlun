@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { API_CACHE_TTL, getApiCache, setApiCache, invalidateApiCache, peekApiCache, scheduleApiRevalidate } from '../utils/apiCache'
 
 /**
  * 与 FastAPI 约定一致：所有业务接口挂在 `/api` 下。
@@ -70,6 +71,38 @@ function withGetDedupe<T>(key: string, factory: () => Promise<T>): Promise<T> {
   })
   inflightGetRequests.set(key, promise)
   return promise
+}
+
+type GetCacheOptions = { signal?: AbortSignal; force?: boolean }
+
+async function withGetCached<T>(
+  key: string,
+  ttlMs: number,
+  factory: () => Promise<T>,
+  options?: GetCacheOptions,
+): Promise<T> {
+  if (options?.signal) return factory()
+
+  if (!options?.force) {
+    const peek = peekApiCache<T>(key)
+    if (peek) {
+      if (peek.isStale) {
+        scheduleApiRevalidate(key, ttlMs, factory)
+      }
+      return peek.data
+    }
+  }
+
+  const dedupeKey = options?.force ? `${key}:refresh` : key
+  return withGetDedupe(dedupeKey, async () => {
+    if (!options?.force) {
+      const hit = getApiCache<T>(key)
+      if (hit != null) return hit
+    }
+    const data = await factory()
+    setApiCache(key, data, ttlMs)
+    return data
+  })
 }
 
 // ─── 全局错误拦截 ──────────────────────────────────────────────────────────────
@@ -204,6 +237,9 @@ export interface MarketOverview {
   sectors: Array<{ name: string; change_pct: number; kind?: string }>
   sectors_top: Array<{ name: string; change_pct: number }>
   sectors_bottom: Array<{ name: string; change_pct: number }>
+  /** 后端拉取失败时为 true，前端可提示重试 */
+  stale?: boolean
+  error?: string
 }
 
 export interface MarketSector {
@@ -290,6 +326,8 @@ export interface StockInfoFields {
 export interface ChanlunResult {
   stock_code: string
   level: string
+  /** 实际 K 线周期（如 1min 级别对应 5 分钟数据） */
+  data_period?: string
   trend: string
   summary: string
   /** 与 /kline 同结构，缠论接口一并返回时可省一次行情请求 */
@@ -343,43 +381,74 @@ export const stockApi = {
     )
   },
 
-  hotStocks(limit = 15) {
-    return api.get<{ stocks: HotStock[]; total: number; error?: string | null }>('/stocks/hot', {
-      params: { limit },
-      timeout: 60000,
-    })
-  },
-
-  marketOverview() {
-    return withGetDedupe('GET:/market/overview', () =>
-      api.get<MarketOverview>('/market/overview', { timeout: 90000 })
+  hotStocks(limit = 15, options?: GetCacheOptions) {
+    const key = `GET:/stocks/hot?limit=${limit}`
+    return withGetCached(
+      key,
+      API_CACHE_TTL.hot,
+      () =>
+        api.get<{ stocks: HotStock[]; total: number; error?: string | null }>('/stocks/hot', {
+          params: { limit },
+          timeout: 60000,
+        }),
+      options,
     )
   },
 
-  news(limit = 10) {
-    return api.get<{ items: NewsItem[] }>('/news', { params: { limit }, timeout: 20000 })
+  marketOverview(options?: GetCacheOptions) {
+    return withGetCached(
+      'GET:/market/overview',
+      API_CACHE_TTL.market,
+      () => api.get<MarketOverview>('/market/overview', { timeout: 90000 }),
+      options,
+    )
+  },
+
+  news(limit = 10, options?: GetCacheOptions) {
+    const key = `GET:/news?limit=${limit}`
+    return withGetCached(
+      key,
+      API_CACHE_TTL.news,
+      () => api.get<{ items: NewsItem[] }>('/news', { params: { limit }, timeout: 20000 }),
+      options,
+    )
   },
 
   sectorStocks(name: string) {
     return api.get<SectorDetail>(`/sector/${encodeURIComponent(name)}/stocks`, { timeout: 90000 })
   },
 
-  info(code: string) {
-    return api.get<{ code: string; exchange: string; info: StockInfoFields }>(
-      `/stocks/${code}/info`
+  info(code: string, options?: GetCacheOptions) {
+    const key = `GET:/stocks/${code}/info`
+    return withGetCached(
+      key,
+      API_CACHE_TTL.info,
+      () => api.get<{ code: string; exchange: string; info: StockInfoFields }>(`/stocks/${code}/info`),
+      options,
     )
   },
 
-  extras(code: string, newsLimit = 8) {
-    return api.get<StockExtras>(`/stocks/${code}/extras`, {
-      params: { news_limit: newsLimit },
-      timeout: 45000,
-    })
+  extras(code: string, newsLimit = 8, options?: GetCacheOptions) {
+    const key = `GET:/stocks/${code}/extras:${newsLimit}`
+    return withGetCached(
+      key,
+      API_CACHE_TTL.extras,
+      () =>
+        api.get<StockExtras>(`/stocks/${code}/extras`, {
+          params: { news_limit: newsLimit },
+          timeout: 45000,
+        }),
+      options,
+    )
   },
 
-  quote(code: string) {
-    return withGetDedupe(`GET:/stocks/${code}/quote`, () =>
-      api.get<Quote>(`/stocks/${code}/quote`)
+  quote(code: string, options?: GetCacheOptions) {
+    const key = `GET:/stocks/${code}/quote`
+    return withGetCached(
+      key,
+      API_CACHE_TTL.quote,
+      () => api.get<Quote>(`/stocks/${code}/quote`),
+      options,
     )
   },
 
@@ -389,21 +458,34 @@ export const stockApi = {
     limit = 500,
     startDate?: string,
     endDate?: string,
-    options?: { signal?: AbortSignal },
+    options?: GetCacheOptions,
   ) {
     const params = new URLSearchParams({ level, limit: String(limit) })
     if (startDate) params.set('start_date', startDate)
     if (endDate) params.set('end_date', endDate)
-    return api.get<{ klines: KLine[]; total: number }>(
-      `/stocks/${code}/kline?${params.toString()}`,
-      { signal: options?.signal },
+    const key = `GET:/stocks/${code}/kline?${params.toString()}`
+    return withGetCached(
+      key,
+      API_CACHE_TTL.kline,
+      () =>
+        api.get<{ klines: KLine[]; total: number }>(
+          `/stocks/${code}/kline?${params.toString()}`,
+          { signal: options?.signal },
+        ),
+      options,
     )
   },
 
-  chanlun(code: string, level: string, options?: { signal?: AbortSignal }) {
-    return api.get<ChanlunResult>(
-      `/chanlun/${code}?level=${level}`,
-      { signal: options?.signal },
+  chanlun(code: string, level: string, options?: GetCacheOptions) {
+    const key = `GET:/chanlun/${code}?level=${level}`
+    return withGetCached(
+      key,
+      API_CACHE_TTL.chanlun,
+      () =>
+        api.get<ChanlunResult>(`/chanlun/${code}?level=${level}`, {
+          signal: options?.signal,
+        }),
+      options,
     )
   },
 
@@ -434,15 +516,23 @@ export const stockApi = {
     )
   },
 
-  watchlist() {
-    return api.get<{ stocks: Quote[]; total: number }>('/watchlist')
+  watchlist(options?: GetCacheOptions) {
+    const key = 'GET:/watchlist'
+    return withGetCached(
+      key,
+      API_CACHE_TTL.watchlist,
+      () => api.get<{ stocks: Quote[]; total: number }>('/watchlist'),
+      options,
+    )
   },
 
   addWatch(code: string) {
+    invalidateApiCache('GET:/watchlist')
     return api.post(`/watchlist/${code}`)
   },
 
   removeWatch(code: string) {
+    invalidateApiCache('GET:/watchlist')
     return api.delete(`/watchlist/${code}`)
   },
 
@@ -508,13 +598,21 @@ export const stockApi = {
     code: string,
     question: string,
     sessionId = 'default',
-    model = 'deepseek'
+    model = 'deepseek',
   ): AsyncGenerator<string, void, unknown> {
     const root = resolveApiBaseURL()
-    const encodedQuestion = encodeURIComponent(question)
-    const url = `${root}/ai/diagnosis?code=${encodeURIComponent(code)}&question=${encodedQuestion}&session_id=${encodeURIComponent(sessionId)}&model=${encodeURIComponent(model)}`
+    const url = `${root}/ai/diagnosis`
 
-    const resp = await fetch(url)
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify({
+        code,
+        question,
+        session_id: sessionId,
+        model,
+      }),
+    })
     if (!resp.ok) {
       let detail = ''
       try {

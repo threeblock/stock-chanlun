@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
+import numpy as np
 import pandas as pd
 
 
@@ -34,51 +35,71 @@ class FenxingDetector:
 
     def _process_inclusion(self):
         """Process containing K-lines before fenxing detection."""
-        rows = self.klines.to_dict("records")
-        if not rows:
-            self.klines = pd.DataFrame(rows)
+        df = self.klines
+        if df.empty:
             return
 
-        result = [rows[0]]
+        highs = df["high"].to_numpy(dtype=float)
+        lows = df["low"].to_numpy(dtype=float)
+        opens = df["open"].to_numpy(dtype=float)
+        closes = df["close"].to_numpy(dtype=float)
+        dates = df["date"].tolist()
+        volumes = df["volume"].to_numpy(dtype=float) if "volume" in df.columns else np.zeros(len(df))
 
-        def merge_direction(prev: dict, cur: dict) -> str:
-            if len(result) >= 2:
-                before = result[-2]
-                if prev["high"] >= before["high"] and prev["low"] >= before["low"]:
+        out_high = [highs[0]]
+        out_low = [lows[0]]
+        out_open = [opens[0]]
+        out_close = [closes[0]]
+        out_date = [dates[0]]
+        out_vol = [float(volumes[0])]
+
+        def merge_direction(prev_h, prev_l, before_h, before_l, cur_h, cur_l) -> str:
+            if len(out_high) >= 2:
+                if prev_h >= before_h and prev_l >= before_l:
                     return "up"
-                if prev["high"] <= before["high"] and prev["low"] <= before["low"]:
+                if prev_h <= before_h and prev_l <= before_l:
                     return "down"
-            return "up" if cur["high"] >= prev["high"] and cur["low"] >= prev["low"] else "down"
+            return "up" if cur_h >= prev_h and cur_l >= prev_l else "down"
 
-        def merge_bar(prev: dict, cur: dict, keep_date, direction: str) -> dict:
+        for i in range(1, len(df)):
+            cur_h, cur_l = highs[i], lows[i]
+            prev_h, prev_l = out_high[-1], out_low[-1]
+            contained = (
+                (prev_l <= cur_l and prev_h >= cur_h)
+                or (cur_l <= prev_l and cur_h >= prev_h)
+            )
+            if not contained:
+                out_high.append(cur_h)
+                out_low.append(cur_l)
+                out_open.append(opens[i])
+                out_close.append(closes[i])
+                out_date.append(dates[i])
+                out_vol.append(float(volumes[i]))
+                continue
+
+            before_h = out_high[-2] if len(out_high) >= 2 else prev_h
+            before_l = out_low[-2] if len(out_low) >= 2 else prev_l
+            direction = merge_direction(prev_h, prev_l, before_h, before_l, cur_h, cur_l)
+            prev_contains = prev_l <= cur_l and prev_h >= cur_h
             if direction == "up":
-                high = max(prev["high"], cur["high"])
-                low = max(prev["low"], cur["low"])
+                out_high[-1] = max(prev_h, cur_h)
+                out_low[-1] = max(prev_l, cur_l)
             else:
-                high = min(prev["high"], cur["high"])
-                low = min(prev["low"], cur["low"])
+                out_high[-1] = min(prev_h, cur_h)
+                out_low[-1] = min(prev_l, cur_l)
+            out_close[-1] = closes[i]
+            out_vol[-1] += float(volumes[i])
+            if not prev_contains:
+                out_date[-1] = dates[i]
 
-            return {
-                "date": keep_date,
-                "open": prev["open"],
-                "high": high,
-                "low": low,
-                "close": cur["close"],
-                "volume": prev.get("volume", 0) + cur.get("volume", 0),
-            }
-
-        for i in range(1, len(rows)):
-            cur = rows[i]
-            prev = result[-1]
-
-            if prev["low"] <= cur["low"] and prev["high"] >= cur["high"]:
-                result[-1] = merge_bar(prev, cur, prev["date"], merge_direction(prev, cur))
-            elif cur["low"] <= prev["low"] and cur["high"] >= prev["high"]:
-                result[-1] = merge_bar(prev, cur, cur["date"], merge_direction(prev, cur))
-            else:
-                result.append(cur)
-
-        self.klines = pd.DataFrame(result).reset_index(drop=True)
+        self.klines = pd.DataFrame({
+            "date": out_date,
+            "open": out_open,
+            "high": out_high,
+            "low": out_low,
+            "close": out_close,
+            "volume": out_vol,
+        }).reset_index(drop=True)
 
     def detect(self) -> list[Fenxing]:
         """
@@ -88,44 +109,58 @@ class FenxingDetector:
         Bottom: middle high and low are both lower than neighbours.
         """
         df = self.klines
-        fenxings = []
+        n = len(df)
+        if n < 3:
+            return []
 
-        for i in range(1, len(df) - 1):
-            prev = df.iloc[i - 1]
-            middle = df.iloc[i]
-            next_ = df.iloc[i + 1]
+        highs = df["high"].to_numpy(dtype=float)
+        lows = df["low"].to_numpy(dtype=float)
+        dates = df["date"].tolist()
+        fenxings: list[Fenxing] = []
 
-            mid_h, mid_l = middle["high"], middle["low"]
+        prev_h = highs[:-2]
+        prev_l = lows[:-2]
+        mid_h = highs[1:-1]
+        mid_l = lows[1:-1]
+        next_h = highs[2:]
+        next_l = lows[2:]
 
-            if (
-                mid_h > prev["high"]
-                and mid_h > next_["high"]
-                and mid_l > prev["low"]
-                and mid_l > next_["low"]
-            ):
-                fenxings.append(
-                    Fenxing(
-                        date=middle["date"],
-                        type="top",
-                        high=float(mid_h),
-                        low=float(mid_l),
-                        index=i,
-                    )
+        top_mask = (
+            (mid_h > prev_h)
+            & (mid_h > next_h)
+            & (mid_l > prev_l)
+            & (mid_l > next_l)
+        )
+        bottom_mask = (
+            (mid_h < prev_h)
+            & (mid_h < next_h)
+            & (mid_l < prev_l)
+            & (mid_l < next_l)
+        )
+
+        for i in np.flatnonzero(top_mask):
+            idx = int(i) + 1
+            fenxings.append(
+                Fenxing(
+                    date=dates[idx],
+                    type="top",
+                    high=float(mid_h[i]),
+                    low=float(mid_l[i]),
+                    index=idx,
                 )
-            elif (
-                mid_h < prev["high"]
-                and mid_h < next_["high"]
-                and mid_l < prev["low"]
-                and mid_l < next_["low"]
-            ):
-                fenxings.append(
-                    Fenxing(
-                        date=middle["date"],
-                        type="bottom",
-                        high=float(mid_h),
-                        low=float(mid_l),
-                        index=i,
-                    )
-                )
+            )
 
+        for i in np.flatnonzero(bottom_mask):
+            idx = int(i) + 1
+            fenxings.append(
+                Fenxing(
+                    date=dates[idx],
+                    type="bottom",
+                    high=float(mid_h[i]),
+                    low=float(mid_l[i]),
+                    index=idx,
+                )
+            )
+
+        fenxings.sort(key=lambda f: f.index)
         return fenxings

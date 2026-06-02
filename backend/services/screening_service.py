@@ -7,35 +7,21 @@ import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
 
 from chanlun.elements import BuySellPoint
-from chanlun.engine import ChanlunEngine
+from core.chanlun_analysis import SCREENING_KLINE_LIMIT, run_analysis
+from core.kline_serialize import analysis_klines_to_df
 from services.akshare_service import (
-    get_kline_hist,
     get_daily_hot_stocks,
     get_realtime_quote,
     get_stock_boards_em,
+    get_stock_info,
 )
 from config import SCREENING_WORKERS
-from utils import chanlun_cache
+from core.indicators import calc_macd_lists
 
 log = logging.getLogger(__name__)
 
 
 # ─── MACD / SKDJ（同前端 stockIndicators.ts 算法） ────────────────────────────
-
-def _ema(data, period):
-    k = 2 / (period + 1)
-    out = [data[0]]
-    for i in range(1, len(data)):
-        out.append(data[i] * k + out[-1] * (1 - k))
-    return out
-
-
-def _calc_macd(closes):
-    ema12 = _ema(closes, 12)
-    ema26 = _ema(closes, 26)
-    dif = [a - b for a, b in zip(ema12, ema26)]
-    dea = _ema(dif, 9)
-    return dif, dea
 
 
 def _calc_skdj(highs, lows, closes, n=9, smooth_n=3, smooth_m=1):
@@ -105,7 +91,7 @@ def _dual_cross_info(klines_df: pd.DataFrame):
     highs = df["high"].tolist()
     lows = df["low"].tolist()
 
-    dif, dea = _calc_macd(closes)
+    dif, dea = calc_macd_lists(closes)
     sk, sd = _calc_skdj(highs, lows, closes)
 
     macd_g = _macd_gold_crosses(dif, dea)
@@ -121,7 +107,6 @@ def _dual_cross_info(klines_df: pd.DataFrame):
             hi = max(m, s)
             if hi <= best_hi:
                 continue
-            # 当日必须 DIF>DEA 且 SK>SD，且不是死叉日
             if not (dif[hi] > dea[hi]):
                 continue
             if sk[hi] is None or sd[hi] is None or sk[hi] <= sd[hi]:
@@ -148,37 +133,16 @@ def _analyze_stock(code: str, level: str) -> dict | None:
     返回字典或 None（分析失败时跳过）。
     """
     try:
-        period_map = {
-            "1min": "1", "5min": "5", "15min": "15",
-            "30min": "30", "60min": "60",
-            "daily": "day", "weekly": "week", "monthly": "month",
-        }
-        period = period_map.get(level, "day")
-        df = get_kline_hist(code, period=period, adjust="qfq")
+        result = run_analysis(code, level, kline_limit=SCREENING_KLINE_LIMIT)
+        df = analysis_klines_to_df(result.klines)
         if df.empty or len(df) < 20:
             return None
 
-        # 取最近 200 根 K 线加速
-        df = df.tail(200).reset_index(drop=True)
-        dates = df['date'].astype(str).tolist()
-
-        # 优先从缠论缓存读取
-        cache_key = f"{code}:{level}"
-        cached_result = chanlun_cache.get(cache_key)
-        if cached_result is not None:
-            result = cached_result
-        else:
-            engine = ChanlunEngine(df)
-            result = engine.analyze(level=level)
-            chanlun_cache.set(cache_key, result)
-
-        # 取最近一笔信号
         latest_signal: BuySellPoint | None = None
         if result.signals:
             sorted_sigs = sorted(result.signals, key=lambda s: s.datetime, reverse=True)
             latest_signal = sorted_sigs[0]
 
-        # MACD+SKDJ 双金叉
         has_dual_cross, dual_cross_date = _dual_cross_info(df)
 
         return {
@@ -187,7 +151,6 @@ def _analyze_stock(code: str, level: str) -> dict | None:
             "latest_signal": latest_signal,
             "has_dual_cross": has_dual_cross,
             "dual_cross_date": dual_cross_date,
-            "dates": dates,
         }
     except Exception:
         log.debug("单只股票选股分析失败 code=%s level=%s", code, level, exc_info=True)
@@ -199,24 +162,41 @@ def _analyze_stock(code: str, level: str) -> dict | None:
 def _normalize_code(code: str) -> str:
     """统一转换为纯6位数字码，便于跨数据源匹配"""
     code = str(code).strip()
-    # 去掉 sh/sz 前缀
     if code.startswith("sh") or code.startswith("sz") or code.startswith("bj"):
         code = code[2:]
     return code.zfill(6)
 
 
-def _get_quote_and_info(codes: list[str], need_industry: bool = False) -> dict[str, dict]:
+def _parse_pe_pb(info: dict) -> tuple[float | None, float | None]:
+    pe = info.get("市盈率")
+    pb = info.get("市净率")
+    try:
+        pe_f = float(pe) if pe not in (None, "", 0) else None
+    except (TypeError, ValueError):
+        pe_f = None
+    try:
+        pb_f = float(pb) if pb not in (None, "", 0) else None
+    except (TypeError, ValueError):
+        pb_f = None
+    return pe_f, pb_f
+
+
+def _get_quote_and_info(
+    codes: list[str],
+    *,
+    need_industry_name: bool = False,
+    need_pe_pb: bool = False,
+) -> dict[str, dict]:
     """
     批量获取实时行情 + 基本面信息。
 
-    need_industry: True 时并发拉取行业/PE/PB，False 时跳过（用于无行业/PE/PB 过滤条件时加速）。
+    need_industry_name: 拉取行业（东方财富板块接口）
+    need_pe_pb: 拉取市盈率/市净率（腾讯行情 info 字段）
     """
     result = {}
 
-    # 统一码格式（6位数字）
     normalized_codes = [_normalize_code(c) for c in codes]
 
-    # 实时行情（批量，一次 HTTP）
     quotes_df = get_realtime_quote(codes)
     quotes_records = quotes_df.to_dict("records") if not quotes_df.empty else []
 
@@ -243,23 +223,30 @@ def _get_quote_and_info(codes: list[str], need_industry: bool = False) -> dict[s
             "pb": None,
         }
 
-    # 基本面（行业、PE、PB）— 有过滤条件时并发拉取，否则跳过
-    if need_industry and codes:
+    if (need_industry_name or need_pe_pb) and codes:
         def fetch_one(code: str) -> tuple[str, str | None, float | None, float | None]:
+            industry = None
+            pe = pb = None
             try:
-                info = get_stock_boards_em(code)
-                return code, info.get("industry"), info.get("pe"), info.get("pb")
+                if need_industry_name:
+                    boards = get_stock_boards_em(code)
+                    industry = boards.get("industry")
+                if need_pe_pb:
+                    info = get_stock_info(code)
+                    pe, pb = _parse_pe_pb(info)
             except Exception:
                 log.debug("股票基本面获取失败 code=%s", code, exc_info=True)
-                return code, None, None, None
+            return code, industry, pe, pb
 
         workers = min(30, len(codes))
         with ThreadPoolExecutor(max_workers=workers) as pool:
             for code, ind, pe, pb in pool.map(fetch_one, codes):
                 if code in result:
-                    result[code]["industry"] = ind
-                    result[code]["pe"] = pe
-                    result[code]["pb"] = pb
+                    if need_industry_name:
+                        result[code]["industry"] = ind
+                    if need_pe_pb:
+                        result[code]["pe"] = pe
+                        result[code]["pb"] = pb
 
     return result
 
@@ -290,7 +277,6 @@ def screen_stocks_stream(
     """
     t0 = time.time()
 
-    # Step 1：候选池
     hot_list = get_daily_hot_stocks(pool_size)
     t1 = time.time()
     log.info("选股候选池获取 count=%s elapsed=%.1fs", len(hot_list), t1 - t0)
@@ -301,15 +287,17 @@ def screen_stocks_stream(
     candidates = [item["code"] for item in hot_list]
     total = len(candidates)
 
-    # 是否有基本面过滤条件
-    need_industry = any(v is not None for v in [industry, pe_max, pb_max])
+    need_industry_name = industry is not None
+    need_pe_pb = pe_max is not None or pb_max is not None
 
-    # Step 2：行情 + 基本面
-    quote_map = _get_quote_and_info(candidates, need_industry=need_industry)
+    quote_map = _get_quote_and_info(
+        candidates,
+        need_industry_name=need_industry_name,
+        need_pe_pb=need_pe_pb,
+    )
     t2 = time.time()
     log.info("选股行情和基本面完成 elapsed=%.1fs", t2 - t1)
 
-    # Step 3：基础指标预过滤
     prefiltered = []
     for code in candidates:
         q = quote_map.get(code, {})
@@ -339,7 +327,6 @@ def screen_stocks_stream(
     t3 = time.time()
     log.info("选股预过滤完成 remaining=%s elapsed=%.1fs", len(prefiltered), t3 - t2)
 
-    # Step 4：并发缠论分析，结果随算随 yield（workers 见 SCREENING_WORKERS 环境变量）
     workers = min(SCREENING_WORKERS, max(1, len(prefiltered)))
     pool = ThreadPoolExecutor(max_workers=workers)
     futures = {pool.submit(_analyze_stock, c, level): c for c in prefiltered}
@@ -399,7 +386,7 @@ def screen_stocks_stream(
                     "has_dual_cross": analysis["has_dual_cross"],
                     "dual_cross_date": analysis["dual_cross_date"],
                     "trend": analysis["trend"],
-                }
+                },
             }
             if emitted_count >= max_results:
                 break
@@ -427,9 +414,7 @@ def screen_stocks(
     pool_size: int = 100,
     max_results: int = 50,
 ) -> list[dict]:
-    """
-    选股主入口（兼容版）。内部调用生成器，等全部算完返回列表。
-    """
+    """选股主入口（兼容版）。内部调用生成器，等全部算完返回列表。"""
     output = []
     for item in screen_stocks_stream(
         change_pct_min=change_pct_min,
