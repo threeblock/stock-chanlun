@@ -5,6 +5,8 @@ import {
   setApiCache,
   scheduleApiRevalidate,
   invalidateApiCache,
+  API_CACHE_MAX_ENTRIES,
+  apiCacheStats,
 } from './apiCache'
 
 describe('apiCache', () => {
@@ -34,5 +36,16 @@ describe('apiCache', () => {
     scheduleApiRevalidate('k', 1000, async () => ({ v: 2 }))
     await vi.waitFor(() => getApiCache<{ v: number }>('k')?.v === 2)
     expect(getApiCache<{ v: number }>('k')?.v).toBe(2)
+  })
+
+  it('evicts oldest entry when exceeding max entries', () => {
+    for (let i = 0; i < API_CACHE_MAX_ENTRIES + 5; i++) {
+      setApiCache(`key-${i}`, i, 60_000)
+    }
+    const stats = apiCacheStats()
+    expect(stats.size).toBeLessThanOrEqual(API_CACHE_MAX_ENTRIES)
+    expect(stats.maxEntries).toBe(API_CACHE_MAX_ENTRIES)
+    expect(getApiCache<number>('key-0')).toBeNull()
+    expect(getApiCache<number>(`key-${API_CACHE_MAX_ENTRIES + 4}`)).toBe(API_CACHE_MAX_ENTRIES + 4)
   })
 })

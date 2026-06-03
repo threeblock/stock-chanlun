@@ -15,6 +15,22 @@ const revalidating = new Set<string>()
 
 /** stale 阈值占 TTL 的比例（0.7 = TTL 70% 后视为 stale） */
 const STALE_RATIO = 0.7
+/** 防止长时间浏览撑爆内存 */
+export const API_CACHE_MAX_ENTRIES = 256
+const MAX_ENTRIES = API_CACHE_MAX_ENTRIES
+
+function touchEntry(key: string, entry: CacheEntry<unknown>) {
+  store.delete(key)
+  store.set(key, entry)
+}
+
+function evictIfNeeded() {
+  while (store.size >= MAX_ENTRIES) {
+    const oldest = store.keys().next().value
+    if (oldest == null) break
+    store.delete(oldest)
+  }
+}
 
 export const API_CACHE_TTL = {
   kline: 60_000,
@@ -26,6 +42,13 @@ export const API_CACHE_TTL = {
   news: 120_000,
   market: 60_000,
   watchlist: 30_000,
+  search: 30_000,
+  comments: 60_000,
+  sector: 120_000,
+  /** 规则引擎 AI 策略（与后端 ai_signal_rule_cache 90s 对齐） */
+  aiSignalRule: 90_000,
+  /** LLM 增强 AI 策略（与后端 ai_signal_llm_cache 300s 对齐） */
+  aiSignalLlm: 300_000,
 } as const
 
 function purgeExpired(key: string, entry: CacheEntry<unknown>): boolean {
@@ -40,6 +63,7 @@ export function getApiCache<T>(key: string): T | null {
   const entry = store.get(key)
   if (!entry) return null
   if (purgeExpired(key, entry)) return null
+  touchEntry(key, entry)
   return entry.data as T
 }
 
@@ -47,6 +71,7 @@ export function peekApiCache<T>(key: string): { data: T; isStale: boolean } | nu
   const entry = store.get(key)
   if (!entry) return null
   if (purgeExpired(key, entry)) return null
+  touchEntry(key, entry)
   return {
     data: entry.data as T,
     isStale: Date.now() > entry.staleAt,
@@ -55,6 +80,8 @@ export function peekApiCache<T>(key: string): { data: T; isStale: boolean } | nu
 
 export function setApiCache<T>(key: string, data: T, ttlMs: number): void {
   const now = Date.now()
+  if (store.has(key)) store.delete(key)
+  else evictIfNeeded()
   store.set(key, {
     data,
     staleAt: now + ttlMs * STALE_RATIO,
@@ -76,12 +103,12 @@ export function invalidateApiCache(prefix?: string): void {
   }
 }
 
-export function apiCacheStats(): { size: number } {
+export function apiCacheStats(): { size: number; maxEntries: number } {
   const now = Date.now()
   for (const [key, entry] of store.entries()) {
     if (now > entry.expiresAt) store.delete(key)
   }
-  return { size: store.size }
+  return { size: store.size, maxEntries: MAX_ENTRIES }
 }
 
 /** 后台静默刷新；同一 key 同时只跑一个 revalidate */

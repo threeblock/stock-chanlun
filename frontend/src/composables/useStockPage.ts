@@ -5,7 +5,7 @@ import { ref } from 'vue'
 import { stockApi, type Quote, type StockInfoFields, type StockExtras } from '../api/stock'
 import { useChanlunStore, type LevelOption } from '../stores/chanlun'
 import { useCommentStore } from '../stores/comment'
-import { invalidateApiCache } from '../utils/apiCache'
+import { invalidateApiCache, peekApiCache } from '../utils/apiCache'
 
 export function useStockPage() {
   const store = useChanlunStore()
@@ -31,30 +31,53 @@ export function useStockPage() {
     else extras.value = null
   }
 
+  async function loadComments(code: string, force = false) {
+    await commentStore.fetchComments(code, force)
+  }
+
   async function loadStock(
     code: string,
     level: LevelOption,
     startDate?: string,
     endDate?: string,
-    options?: { force?: boolean },
+    options?: { force?: boolean; loadComments?: boolean },
   ) {
     if (!code) return
     const force = options?.force ?? false
-    await Promise.all([
+    const tasks: Promise<unknown>[] = [
       store.loadAll(code, level, startDate, endDate, { force }),
       loadQuoteExtras(code, force),
-      commentStore.fetchComments(code, force),
-    ])
+    ]
+    if (options?.loadComments) {
+      tasks.push(loadComments(code, force))
+    }
+    await Promise.all(tasks)
   }
 
   async function changeLevel(code: string, level: LevelOption) {
     invalidateApiCache(`GET:/chanlun/${code}`)
     invalidateApiCache(`GET:/stocks/${code}/kline`)
+    invalidateApiCache(`GET:/chanlun/${code}/ai`)
     await store.loadAll(code, level, undefined, undefined, { force: true })
   }
 
   async function refreshAIStrategy(code: string, options?: { useLlm?: boolean }) {
-    await store.fetchAISignal(code, store.currentLevel, options)
+    await store.fetchAISignal(code, store.currentLevel, { ...options, force: true })
+  }
+
+  async function refreshQuotes(code: string) {
+    if (!code) return
+    const quoteKeys = [
+      `GET:/stocks/${code}/quote`,
+      `GET:/stocks/${code}/info`,
+      `GET:/stocks/${code}/extras:8`,
+    ]
+    const needsFetch = quoteKeys.some(k => {
+      const peek = peekApiCache(k)
+      return !peek || peek.isStale
+    })
+    if (!needsFetch) return
+    await loadQuoteExtras(code, true)
   }
 
   return {
@@ -65,6 +88,8 @@ export function useStockPage() {
     loadStock,
     changeLevel,
     loadQuoteExtras,
+    refreshQuotes,
+    loadComments,
     refreshAIStrategy,
   }
 }

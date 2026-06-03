@@ -547,7 +547,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 }
 
 const { stop: stopAutoRefresh } = useVisibilityRefresh(
-  () => refreshAll(),
+  () => refreshAll(false),
   AUTO_REFRESH_INTERVAL,
 )
 

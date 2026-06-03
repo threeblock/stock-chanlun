@@ -47,6 +47,13 @@ export const useWatchlistStore = defineStore('watchlist', () => {
   )
 
   async function fetchWatchlist(force = false) {
+    if (
+      !force &&
+      lastUpdated.value &&
+      Date.now() - lastUpdated.value.getTime() < 30_000
+    ) {
+      return
+    }
     loading.value = true
     error.value = null
     try {

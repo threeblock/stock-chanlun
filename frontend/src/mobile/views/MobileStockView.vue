@@ -105,6 +105,7 @@
     </template>
 
     <MobileStockSheet
+      v-if="sheetMounted"
       v-model="showSheet"
       :stock-code="stockCode"
       :quote="quote"
@@ -117,7 +118,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, defineAsyncComponent } from 'vue'
 import { useDebouncedCallback } from '@/composables/useDebounce'
 import { useRoute } from 'vue-router'
 import type { LevelOption } from '@/stores/chanlun'
@@ -125,18 +126,28 @@ import { useWatchlistStore } from '@/stores/watchlist'
 import type { Quote } from '@/api/stock'
 import toast from '@/composables/useToast'
 import { useStockPage } from '@/composables/useStockPage'
+import { useVisibilityRefresh } from '@/composables/useVisibilityRefresh'
+import { API_CACHE_TTL } from '@/utils/apiCache'
 import MobileKLineChart from '../components/MobileKLineChart.vue'
-import MobileStockSheet from '../components/MobileStockSheet.vue'
 import MobileIndicatorSelector from '../components/MobileIndicatorSelector.vue'
 
+const MobileStockSheet = defineAsyncComponent(
+  () => import('../components/MobileStockSheet.vue'),
+)
+
 const route = useRoute()
-const { store, quote, stockInfo, loadStock, changeLevel: changeLevelBase, refreshAIStrategy } = useStockPage()
+const { store, quote, stockInfo, loadStock, changeLevel: changeLevelBase, refreshAIStrategy, refreshQuotes } = useStockPage()
 const watchlistStore = useWatchlistStore()
 
 const zoomStart = ref(0)
 const zoomEnd = ref(100)
 const showSheet = ref(false)
+const sheetMounted = ref(false)
 const signalsExpanded = ref(false)
+
+watch(showSheet, (open) => {
+  if (open) sheetMounted.value = true
+})
 
 const isWatching = computed(() =>
   watchlistStore.stocks.some(s => s.code === stockCode.value),
@@ -251,6 +262,12 @@ onMounted(() => {
   void watchlistStore.fetchWatchlist()
   loadData()
 })
+
+useVisibilityRefresh(
+  () => refreshQuotes(stockCode.value),
+  API_CACHE_TTL.quote,
+)
+
 watch(() => route.params.code, () => { signalsExpanded.value = false; loadData() })
 </script>
 

@@ -3,6 +3,13 @@ import type { KLine } from '../api/stock'
 /** 主图渲染超过此根数时做 LTTB 降采样（保留 OHLC 极值） */
 export const KLINE_DISPLAY_MAX = 600
 
+/** 用于跳过 K 线未变时的整图重建 */
+export function klineSeriesSignature(klines: KLine[]): string {
+  if (!klines.length) return '0'
+  const last = klines[klines.length - 1]
+  return `${klines.length}:${last.date}:${last.open}:${last.high}:${last.low}:${last.close}:${last.volume}`
+}
+
 function typicalPrice(k: KLine): number {
   return (k.high + k.low + k.close) / 3
 }

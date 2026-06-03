@@ -103,13 +103,16 @@
             </div>
           </div>
 
-          <button class="btn btn-primary run-btn" @click="runScreen" :disabled="loading">
-            <span v-if="loading" class="spinner" />
-            <span v-else>开始选股</span>
+          <button v-if="loading" type="button" class="btn btn-ghost run-btn stop-screen-btn" @click="stopScreen">
+            停止筛选
+          </button>
+          <button v-else type="button" class="btn btn-primary run-btn" @click="runScreen">
+            开始选股
           </button>
 
           <p v-if="loading" class="loading-hint">
-            正在分析股票，请稍候...
+            正在分析股票，请稍候…
+            <template v-if="results.length > 0">（已命中 {{ results.length }} 只）</template>
           </p>
         </div>
       </aside>
@@ -124,12 +127,16 @@
             </template>
             <template v-else>分析中...</template>
           </span>
-          <button v-if="results.length > 0" class="btn btn-ghost btn-sm" @click="clearResults">清除结果</button>
+          <button v-if="results.length > 0" type="button" class="btn btn-ghost btn-sm" @click="exportResults">
+            导出 CSV
+          </button>
+          <button v-if="results.length > 0" type="button" class="btn btn-ghost btn-sm" @click="clearResults">清除结果</button>
         </div>
+        <p v-if="screenError && results.length > 0" class="partial-hint">{{ screenError }}</p>
 
-        <!-- 加载骨架屏 + 进度 -->
-        <div v-if="loading" class="skeleton-list">
-          <div v-for="i in 8" :key="i" class="skeleton-row" />
+        <!-- 进度（筛选进行中） -->
+        <div v-if="loading" class="screen-progress-block">
+          <p v-if="isRetrying && screenError" class="retry-hint">{{ screenError }}</p>
           <div class="progress-wrap">
             <div class="progress-bar">
               <div class="progress-fill" :style="{ width: progressPct + '%' }" />
@@ -137,11 +144,16 @@
             <span class="progress-text">
               正在分析 {{ progress.done }} / {{ progress.total }} 只股票...
             </span>
+            <button type="button" class="btn btn-ghost btn-sm" @click="stopScreen">停止</button>
           </div>
         </div>
 
+        <div v-if="loading && results.length === 0" class="skeleton-list">
+          <div v-for="i in 8" :key="i" class="skeleton-row" />
+        </div>
+
         <!-- 错误状态 -->
-        <div v-else-if="screenError && results.length === 0" class="empty-state">
+        <div v-else-if="!loading && screenError && results.length === 0" class="empty-state">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="empty-icon">
             <circle cx="12" cy="12" r="10"/>
             <line x1="12" y1="8" x2="12" y2="12"/>
@@ -162,7 +174,7 @@
           <p class="empty-sub">系统将从今日涨幅榜候选池中筛选符合条件的股票</p>
         </div>
 
-        <div v-else-if="results.length === 0 && !loading" class="empty-state">
+        <div v-else-if="!loading && results.length === 0 && hasSearched" class="empty-state">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="empty-icon">
             <path d="M3 6h18M3 12h18M3 18h18"/>
           </svg>
@@ -170,8 +182,8 @@
           <p class="empty-sub">尝试放宽条件或扩大候选池后重新筛选</p>
         </div>
 
-        <!-- 结果表格 -->
-        <div v-else class="results-table-wrap">
+        <!-- 结果表格（筛选中也可边出边显） -->
+        <div v-else-if="results.length > 0" class="results-table-wrap">
           <table class="results-table">
             <thead>
               <tr>
@@ -234,15 +246,23 @@
 <script setup lang="ts">
 import { reactive, ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { resolveApiBaseURL, stockApi, type StockScreenResult } from '../api/stock'
+import { stockApi } from '../api/stock'
+import { useScreenStream } from '../composables/useScreenStream'
+import { downloadScreenResultsCsv } from '../utils/exportScreenCsv'
 
 const router = useRouter()
-const loading = ref(false)
-const hasSearched = ref(false)
-const screenError = ref('')
-const results = ref<StockScreenResult[]>([])
+const {
+  loading,
+  hasSearched,
+  screenError,
+  isRetrying,
+  results,
+  progress,
+  runScreen: runScreenStream,
+  stopScreen,
+  clearResults: resetScreen,
+} = useScreenStream()
 const selectedSignals = ref<string[]>([])
-const progress = ref({ done: 0, total: 0 })
 const PAGE_SIZE = 20
 const displayLimit = ref(PAGE_SIZE)
 const progressPct = computed(() => {
@@ -299,68 +319,31 @@ function buildParams() {
 }
 
 async function runScreen() {
-  loading.value = true
-  hasSearched.value = true
-  results.value = []
   displayLimit.value = PAGE_SIZE
-  progress.value = { done: 0, total: 0 }
-
   const p = buildParams()
-  const qs = new URLSearchParams()
-  if (p.change_pct_min != null) qs.set('change_pct_min', String(p.change_pct_min))
-  if (p.change_pct_max != null) qs.set('change_pct_max', String(p.change_pct_max))
-  if (p.volume_min != null) qs.set('volume_min', String(p.volume_min))
-  if (p.volume_max != null) qs.set('volume_max', String(p.volume_max))
-  if (p.industry) qs.set('industry', p.industry)
-  if (p.pe_max != null) qs.set('pe_max', String(p.pe_max))
-  if (p.pb_max != null) qs.set('pb_max', String(p.pb_max))
-  if (p.signals) qs.set('signals', p.signals)
-  qs.set('dual_cross', String(!!p.dual_cross))
-  qs.set('level', p.level ?? 'daily')
-  qs.set('pool_size', String(p.pool_size))
-  qs.set('max_results', '50')
-
-  try {
-    const resp = await fetch(`${resolveApiBaseURL()}/stocks/screen-stream?${qs.toString()}`)
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-    const reader = resp.body!.getReader()
-    const decoder = new TextDecoder()
-    let buf = ''
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buf += decoder.decode(value, { stream: true })
-      const lines = buf.split('\n')
-      buf = lines.pop() ?? ''
-      for (const line of lines) {
-        const raw = line.trim()
-        if (!raw.startsWith('data: ')) continue
-        try {
-          const item = JSON.parse(raw.slice(6))
-          if (item.type === 'progress') {
-            progress.value = { done: item.done, total: item.total }
-          } else if (item.type === 'result') {
-            results.value.push(item.data as StockScreenResult)
-          } else if (item.type === 'done') {
-            loading.value = false
-            return
-          }
-        } catch {/* ignore parse errors */}
-      }
-    }
-  } catch (e) {
-    console.error('选股失败:', e)
-    screenError.value = e instanceof Error ? e.message : '选股失败，请检查网络后重试'
-    results.value = []
-  } finally {
-    loading.value = false
-  }
+  await runScreenStream({
+    change_pct_min: p.change_pct_min,
+    change_pct_max: p.change_pct_max,
+    volume_min: p.volume_min,
+    volume_max: p.volume_max,
+    industry: p.industry,
+    pe_max: p.pe_max,
+    pb_max: p.pb_max,
+    signals: p.signals,
+    dual_cross: !!p.dual_cross,
+    level: p.level ?? 'daily',
+    pool_size: p.pool_size,
+    max_results: 50,
+  })
 }
 
 function clearResults() {
-  results.value = []
-  hasSearched.value = false
+  resetScreen()
+  displayLimit.value = PAGE_SIZE
+}
+
+function exportResults() {
+  downloadScreenResultsCsv(results.value)
 }
 
 function goToStock(code: string) {
@@ -559,6 +542,14 @@ function trendClass(trend: string): string {
 }
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
+.screen-progress-block {
+  margin-bottom: 12px;
+}
+
+.stop-screen-btn {
+  margin-top: 4px;
+}
+
 .progress-wrap {
   margin-top: 12px;
   padding: 12px 16px;
@@ -568,6 +559,7 @@ function trendClass(trend: string): string {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
 }
 .progress-bar {
   flex: 1;
@@ -586,6 +578,21 @@ function trendClass(trend: string): string {
   font-size: 0.8rem;
   color: var(--text-secondary);
   white-space: nowrap;
+}
+
+.retry-hint,
+.partial-hint {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 0.8rem;
+  color: var(--accent-amber, #f59e0b);
+  background: rgba(245, 158, 11, 0.08);
+  border-radius: 6px;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+.partial-hint {
+  margin-bottom: 8px;
 }
 
 /* Empty state */

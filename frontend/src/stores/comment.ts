@@ -15,7 +15,7 @@ export const useCommentStore = defineStore('comment', () => {
     loadingMap.value[code] = true
     errorMap.value[code] = ''
     try {
-      const res = await stockApi.getComments(code)
+      const res = await stockApi.getComments(code, { force })
       cache.value[code] = res.data.comments ?? []
     } catch (e: unknown) {
       errorMap.value[code] = (e as Error).message ?? '加载失败'

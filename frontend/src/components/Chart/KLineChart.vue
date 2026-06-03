@@ -39,7 +39,8 @@ import echarts from '../../utils/echarts'
 import type { KLine, Bi, XiangSegment, Zhongshu, Signal, AISignal, SupportResistance } from '../../api/stock'
 import type { IndicatorConfig } from '../../stores/chanlun'
 import { calcMA, computeDualMacdSkdjMarkerIndices } from '../../utils/stockIndicators'
-import { downsampleKlines } from '../../utils/chartDownsample'
+import { downsampleKlines, klineSeriesSignature } from '../../utils/chartDownsample'
+import { setChartOptionKeepDataZoom } from '../../utils/chartEchartsHelpers'
 import { useDebouncedCallback } from '../../composables/useDebounce'
 import { useKlineIndicators } from '../../composables/useKlineIndicators'
 import {
@@ -556,8 +557,17 @@ function initChart() {
 
 function updateChart() {
   if (!chart) return
-  chart.setOption(buildOption(), { notMerge: true })
+  setChartOptionKeepDataZoom(chart, buildOption(), true)
   setBarInfoByIndex(displayKlines.value.length - 1)
+  queueChanlunGraphic()
+}
+
+/**
+ * 局部更新：缠论叠加层数据变化时，只重绘 graphic，不重建整个 chart option。
+ */
+function updateOverlayOnly() {
+  if (!chart) return
+  syncChanlunOverlayCache()
   queueChanlunGraphic()
 }
 
@@ -599,21 +609,17 @@ function syncChanlunOverlayCache() {
   })
 }
 
-/**
- * 局部更新：缠论叠加层数据变化时，只重绘 graphic，不重建整个 chart option。
- */
-function updateOverlayOnly() {
+function updateMaIndicators() {
   if (!chart) return
-  syncChanlunOverlayCache()
-  queueChanlunGraphic()
+  setChartOptionKeepDataZoom(chart, buildOption(), true)
+  setBarInfoByIndex(displayKlines.value.length - 1)
 }
 
-/**
- * 仅指标配置（MA 显示/隐藏）变化时调用，需要重建 base option。
- */
+/** 副图增删时重建 option，保留 dataZoom */
 function updateIndicatorOption() {
   if (!chart) return
-  chart.setOption(buildOption(), { notMerge: true })
+  setChartOptionKeepDataZoom(chart, buildOption(), true)
+  setBarInfoByIndex(displayKlines.value.length - 1)
   queueChanlunGraphic()
 }
 
@@ -641,13 +647,22 @@ onUnmounted(() => {
   window.removeEventListener('resize', onResize)
 })
 
+let lastKlineSig = ''
+
+function applyKlineUpdate() {
+  if (!chart) return
+  setChartOptionKeepDataZoom(chart, buildOption(), true)
+  setBarInfoByIndex(displayKlines.value.length - 1)
+  queueChanlunGraphic()
+}
+
 watch(
   () => props.klines,
-  () => {
-    if (!chart) return
-    chart.setOption(buildOption(), { notMerge: true })
-    setBarInfoByIndex(displayKlines.value.length - 1)
-    queueChanlunGraphic()
+  (kl) => {
+    const sig = klineSeriesSignature(kl)
+    if (sig === lastKlineSig) return
+    lastKlineSig = sig
+    applyKlineUpdate()
   }
 )
 
@@ -657,17 +672,30 @@ watch(
   { deep: true }
 )
 
+/** 缠论/AI 线等仅影响 graphic，不必重建 K 线 series */
 watch(
   () => [
-    props.indicators?.ma5,
-    props.indicators?.ma20,
-    props.indicators?.ma60,
     props.indicators?.bis,
     props.indicators?.xiangs,
     props.indicators?.zhongshus,
     props.indicators?.signals,
     props.indicators?.aiLines,
     props.indicators?.supportResistance,
+  ],
+  updateOverlayOnly,
+)
+
+watch(
+  () => [
+    props.indicators?.ma5,
+    props.indicators?.ma20,
+    props.indicators?.ma60,
+  ],
+  updateMaIndicators,
+)
+
+watch(
+  () => [
     props.indicators?.volume,
     props.indicators?.macd,
     props.indicators?.rsi,

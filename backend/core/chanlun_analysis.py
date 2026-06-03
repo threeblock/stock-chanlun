@@ -40,7 +40,7 @@ def run_analysis(code: str, level: str, kline_limit: int = DEFAULT_KLINE_LIMIT) 
         return cached
 
     period = level_to_period(level)
-    df = get_kline_hist(code, period=period, start_date=None, adjust="qfq")
+    df = get_kline_hist(code, period=period, start_date=None, adjust="qfq", limit=kline_limit)
 
     if df.empty or len(df) < 20:
         raise HTTPException(

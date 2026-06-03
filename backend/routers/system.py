@@ -14,6 +14,9 @@ from utils import (
     chanlun_global_limiter,
     chanlun_ip_limiter,
     kline_global_limiter,
+    market_overview_cache,
+    sector_board_cache,
+    stock_news_cache,
     watchlist_quote_cache,
 )
 
@@ -31,6 +34,9 @@ def health_check():
             "ai_signal_rule": ai_signal_rule_cache.stats(),
             "ai_signal_llm": ai_signal_llm_cache.stats(),
             "watchlist_quote": watchlist_quote_cache.stats(),
+            "market_overview": market_overview_cache.stats(),
+            "sector_board": sector_board_cache.stats(),
+            "stock_news": stock_news_cache.stats(),
             "akshare": akshare_cache_stats(),
         },
         "rate_limiters": {

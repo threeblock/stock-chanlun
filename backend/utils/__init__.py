@@ -80,6 +80,11 @@ ai_signal_llm_cache = LRUCache(maxsize=64, ttl=300.0)
 # 自选股行情聚合（15s，减轻批量 quote 压力）
 watchlist_quote_cache = LRUCache(maxsize=8, ttl=15.0)
 
+# 大盘概览 / 板块成分 / 财经新闻（与前端 API_CACHE_TTL 对齐）
+market_overview_cache = LRUCache(maxsize=4, ttl=60.0)
+sector_board_cache = LRUCache(maxsize=64, ttl=120.0)
+stock_news_cache = LRUCache(maxsize=8, ttl=120.0)
+
 
 # ── HTTP 重试装饰器 ─────────────────────────────────────────────────────────
 def with_retry(
@@ -218,3 +223,5 @@ kline_global_limiter = RateLimiter(max_calls=1000, window_seconds=60.0)
 kline_ip_limiter = RateLimiter(max_calls=200, window_seconds=60.0)
 ai_diagnosis_global_limiter = RateLimiter(max_calls=120, window_seconds=60.0)
 ai_diagnosis_ip_limiter = RateLimiter(max_calls=30, window_seconds=60.0)
+light_global_limiter = RateLimiter(max_calls=2000, window_seconds=60.0)
+light_ip_limiter = RateLimiter(max_calls=300, window_seconds=60.0)

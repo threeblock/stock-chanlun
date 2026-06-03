@@ -182,7 +182,7 @@ async function removeStock(code: string) {
 }
 
 useVisibilityRefresh(async () => {
-  await store.fetchWatchlist()
+  await store.fetchWatchlist(true)
 }, AUTO_REFRESH_INTERVAL)
 
 onMounted(() => {

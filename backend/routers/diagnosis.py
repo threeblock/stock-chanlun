@@ -56,43 +56,62 @@ async def _diagnosis_event_stream(
 
         sym, _exchange = normalize_stock_code(code)
 
-        stock_name = ""
-        try:
-            info = get_stock_info(sym)
-            stock_name = str(info.get("名称", sym))
-        except Exception:
+        async def _load_info() -> tuple[str, str]:
+            name = sym
+            try:
+                info = await asyncio.to_thread(get_stock_info, sym)
+                name = str(info.get("名称", sym))
+            except Exception:
+                pass
+            return sym, name
+
+        async def _load_analysis():
+            return await asyncio.to_thread(run_analysis, sym, "daily")
+
+        info_res, analysis_res = await asyncio.gather(
+            _load_info(),
+            _load_analysis(),
+            return_exceptions=True,
+        )
+
+        if isinstance(info_res, Exception):
             stock_name = sym
+        else:
+            _, stock_name = info_res
 
         analysis_context = ""
-        try:
-            result = await asyncio.to_thread(run_analysis, sym, "daily")
-            recent_kl = result.klines[-20:] if len(result.klines) > 20 else result.klines
-            kl_lines = "\n".join(
-                f"{format_date_short(k.date)}  开:{k.open:.2f} 高:{k.high:.2f} 低:{k.low:.2f} 收:{k.close:.2f}"
-                for k in recent_kl
-            )
-            bi_lines = "\n".join(
-                f"[{format_date_short(b.start)}] {b.direction} 高:{b.high:.2f} 低:{b.low:.2f}"
-                for b in result.bis[-5:]
-            )
-            zs_lines = "\n".join(
-                f"[{format_date_short(z.start)}] 中枢 高:{z.range_high:.2f} 低:{z.range_low:.2f}"
-                for z in result.zhongshus[-3:]
-            )
-            sig_lines = "\n".join(
-                f"{format_date_short(s.datetime)} {s.type}@{s.price:.2f} 置信:{s.confidence}"
-                for s in result.signals[-5:]
-            )
+        if isinstance(analysis_res, Exception):
+            analysis_context = f"[缠论数据获取失败: {analysis_res}]"
+        else:
+            result = analysis_res
+            try:
+                recent_kl = result.klines[-20:] if len(result.klines) > 20 else result.klines
+                kl_lines = "\n".join(
+                    f"{format_date_short(k.date)}  开:{k.open:.2f} 高:{k.high:.2f} 低:{k.low:.2f} 收:{k.close:.2f}"
+                    for k in recent_kl
+                )
+                bi_lines = "\n".join(
+                    f"[{format_date_short(b.start)}] {b.direction} 高:{b.high:.2f} 低:{b.low:.2f}"
+                    for b in result.bis[-5:]
+                )
+                zs_lines = "\n".join(
+                    f"[{format_date_short(z.start)}] 中枢 高:{z.range_high:.2f} 低:{z.range_low:.2f}"
+                    for z in result.zhongshus[-3:]
+                )
+                sig_lines = "\n".join(
+                    f"{format_date_short(s.datetime)} {s.type}@{s.price:.2f} 置信:{s.confidence}"
+                    for s in result.signals[-5:]
+                )
 
-            analysis_context = f"""
+                analysis_context = f"""
 【{stock_name}({sym}) 日线数据】
 最近K线：\n{kl_lines}
 笔：\n{bi_lines or '暂无'}
 中枢：\n{zs_lines or '暂无'}
 买卖点：\n{sig_lines or '暂无'}
 趋势：{result.trend}"""
-        except Exception as e:
-            analysis_context = f"[缠论数据获取失败: {e}]"
+            except Exception as e:
+                analysis_context = f"[缠论数据解析失败: {e}]"
 
         system_prompt = f"""你是专业的缠论技术分析助手，名称"缠师"。
 

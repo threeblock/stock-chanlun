@@ -10,6 +10,8 @@ from utils import (
     chanlun_ip_limiter,
     kline_global_limiter,
     kline_ip_limiter,
+    light_global_limiter,
+    light_ip_limiter,
 )
 
 
@@ -48,6 +50,17 @@ def check_kline_rate_limits(ip: str) -> None:
         raise HTTPException(
             status_code=429,
             detail="K 线请求过于频繁，请稍后再试",
+        )
+
+
+def check_light_api_rate_limits(ip: str) -> None:
+    """搜索 / 热门 / 新闻 / 评论等轻量读接口。"""
+    if not light_global_limiter.try_acquire("global"):
+        raise HTTPException(status_code=429, detail="服务繁忙，请稍后重试")
+    if not light_ip_limiter.try_acquire(ip):
+        raise HTTPException(
+            status_code=429,
+            detail="请求过于频繁，请稍后再试",
         )
 
 

@@ -371,13 +371,26 @@ export interface Comment {
 }
 
 export const stockApi = {
-  search(q: string) {
-    if (searchAbortController) searchAbortController.abort()
-    searchAbortController = new AbortController()
-
-    return api.get<{ stocks: { code: string; name: string }[]; total: number }>(
-      `/stocks/search?q=${q}`,
-      { signal: searchAbortController.signal }
+  search(q: string, options?: GetCacheOptions) {
+    const trimmed = q.trim()
+    if (!trimmed) {
+      return Promise.resolve({
+        data: { stocks: [] as { code: string; name: string }[], total: 0 },
+      })
+    }
+    const key = `GET:/stocks/search?q=${encodeURIComponent(trimmed)}`
+    return withGetCached(
+      key,
+      API_CACHE_TTL.search,
+      () => {
+        if (searchAbortController) searchAbortController.abort()
+        searchAbortController = new AbortController()
+        return api.get<{ stocks: { code: string; name: string }[]; total: number }>(
+          `/stocks/search?q=${encodeURIComponent(trimmed)}`,
+          { signal: searchAbortController.signal },
+        )
+      },
+      options,
     )
   },
 
@@ -414,8 +427,14 @@ export const stockApi = {
     )
   },
 
-  sectorStocks(name: string) {
-    return api.get<SectorDetail>(`/sector/${encodeURIComponent(name)}/stocks`, { timeout: 90000 })
+  sectorStocks(name: string, options?: GetCacheOptions) {
+    const key = `GET:/sector/${encodeURIComponent(name)}/stocks`
+    return withGetCached(
+      key,
+      API_CACHE_TTL.sector,
+      () => api.get<SectorDetail>(`/sector/${encodeURIComponent(name)}/stocks`, { timeout: 90000 }),
+      options,
+    )
   },
 
   info(code: string, options?: GetCacheOptions) {
@@ -493,28 +512,26 @@ export const stockApi = {
     code: string,
     level: string,
     model = 'deepseek',
-    options?: { useLlm?: boolean; signal?: AbortSignal },
+    options?: { useLlm?: boolean; signal?: AbortSignal; force?: boolean },
   ) {
+    const useLlm = options?.useLlm ?? false
     const params = new URLSearchParams({ level, model })
-    if (options?.useLlm) params.set('use_llm', 'true')
-    const timeout = options?.useLlm ? 120000 : 45000
-    return api.get<AISignal>(`/chanlun/${code}/ai?${params.toString()}`, {
-      timeout,
-      signal: options?.signal,
-    })
-  },
-
-  /** 多级别并行缠论分析 */
-  chanlunMultiLevel(code: string, levels: string[]) {
-    return api.get<{
-      code: string
-      levels: Record<string, unknown>
-      count: number
-      elapsed_ms: number
-    }>(
-      `/chanlun/${code}/multi-level?levels=${levels.join(',')}`
+    if (useLlm) params.set('use_llm', 'true')
+    const key = `GET:/chanlun/${code}/ai?${params.toString()}`
+    const ttl = useLlm ? API_CACHE_TTL.aiSignalLlm : API_CACHE_TTL.aiSignalRule
+    const timeout = useLlm ? 120000 : 45000
+    return withGetCached(
+      key,
+      ttl,
+      () =>
+        api.get<AISignal>(`/chanlun/${code}/ai?${params.toString()}`, {
+          timeout,
+          signal: options?.signal,
+        }),
+      { force: options?.force, signal: options?.signal },
     )
   },
+
 
   watchlist(options?: GetCacheOptions) {
     const key = 'GET:/watchlist'
@@ -568,11 +585,18 @@ export const stockApi = {
 
   // ─── 评论笔记 ────────────────────────────────────────────────────────────
 
-  getComments(code: string) {
-    return api.get<{ comments: Comment[]; total: number }>(`/comments/${code}`)
+  getComments(code: string, options?: GetCacheOptions) {
+    const key = `GET:/comments/${code}`
+    return withGetCached(
+      key,
+      API_CACHE_TTL.comments,
+      () => api.get<{ comments: Comment[]; total: number }>(`/comments/${code}`),
+      options,
+    )
   },
 
   addComment(code: string, content: string) {
+    invalidateApiCache(`GET:/comments/${code}`)
     return api.post<{ comment: Comment; added: boolean }>(
       `/comments/${code}`,
       { content }
@@ -580,6 +604,7 @@ export const stockApi = {
   },
 
   updateComment(code: string, commentId: string, content: string) {
+    invalidateApiCache(`GET:/comments/${code}`)
     return api.put<{ comment: Comment; updated: boolean }>(
       `/comments/${code}/${commentId}`,
       { content }
@@ -587,6 +612,7 @@ export const stockApi = {
   },
 
   deleteComment(code: string, commentId: string) {
+    invalidateApiCache(`GET:/comments/${code}`)
     return api.delete<{ id: string; deleted: boolean }>(
       `/comments/${code}/${commentId}`
     )
@@ -599,6 +625,7 @@ export const stockApi = {
     question: string,
     sessionId = 'default',
     model = 'deepseek',
+    signal?: AbortSignal,
   ): AsyncGenerator<string, void, unknown> {
     const root = resolveApiBaseURL()
     const url = `${root}/ai/diagnosis`
@@ -612,6 +639,7 @@ export const stockApi = {
         session_id: sessionId,
         model,
       }),
+      signal,
     })
     if (!resp.ok) {
       let detail = ''
@@ -636,6 +664,10 @@ export const stockApi = {
     let buffer = ''
 
     while (true) {
+      if (signal?.aborted) {
+        await reader.cancel().catch(() => {})
+        throw new DOMException('Aborted', 'AbortError')
+      }
       const { done, value } = await reader.read()
       if (done) break
 

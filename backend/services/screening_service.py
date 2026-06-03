@@ -16,111 +16,26 @@ from services.akshare_service import (
     get_stock_info,
 )
 from config import SCREENING_WORKERS
-from core.indicators import calc_macd_lists
+from core.indicators import calc_macd_lists, calc_skdj_lists, find_latest_dual_cross_bar
 
 log = logging.getLogger(__name__)
 
 
-# ─── MACD / SKDJ（同前端 stockIndicators.ts 算法） ────────────────────────────
-
-
-def _calc_skdj(highs, lows, closes, n=9, smooth_n=3, smooth_m=1):
-    rsv = [None] * len(closes)
-    for i in range(n - 1, len(closes)):
-        ln = min(lows[i - n + 1:i + 1])
-        hn = max(highs[i - n + 1:i + 1])
-        rsv[i] = 50 if hn == ln else (closes[i] - ln) / (hn - ln) * 100
-
-    sk = [None] * len(closes)
-    prev_sk = None
-    for i in range(len(closes)):
-        r = rsv[i]
-        if r is None:
-            continue
-        prev_sk = r if prev_sk is None else (smooth_m * r + (smooth_n - smooth_m) * prev_sk) / smooth_n
-        sk[i] = prev_sk
-
-    sd = [None] * len(closes)
-    prev_sd = None
-    for i in range(len(closes)):
-        s = sk[i]
-        if s is None:
-            continue
-        prev_sd = s if prev_sd is None else (smooth_m * s + (smooth_n - smooth_m) * prev_sd) / smooth_n
-        sd[i] = prev_sd
-
-    return sk, sd
-
-
-def _macd_gold_crosses(dif, dea):
-    crosses = []
-    for i in range(1, len(dif)):
-        if dif[i - 1] <= dea[i - 1] and dif[i] > dea[i]:
-            crosses.append(i)
-    return crosses
-
-
-def _skdj_gold_crosses(sk, sd):
-    crosses = []
-    for i in range(1, len(sk)):
-        a, b = sk[i - 1], sk[i]
-        ap, bp = sd[i - 1], sd[i]
-        if a is None or b is None or ap is None or bp is None:
-            continue
-        if a <= ap and b > bp:
-            crosses.append(i)
-    return crosses
-
-
 def _dual_cross_info(klines_df: pd.DataFrame):
-    """
-    计算 MACD+SKDJ 双金叉共振。
-    返回 (has_dual_cross, dual_cross_date_str)
-
-    注意：须取「最近」一次有效双金叉（bar 索引最大），不能命中第一对就返回，
-    否则在 200 根 K 线内会错误展示数月前的日期。
-    """
+    """计算 MACD+SKDJ 双金叉共振，返回 (has_dual_cross, dual_cross_date_str)。"""
     if len(klines_df) < 30:
         return False, None
 
-    df = klines_df.copy()
-    df["date"] = pd.to_datetime(df["date"])
-    df = df.sort_values("date").reset_index(drop=True)
-
-    closes = df["close"].tolist()
-    highs = df["high"].tolist()
-    lows = df["low"].tolist()
-
+    closes = klines_df["close"].tolist()
+    highs = klines_df["high"].tolist()
+    lows = klines_df["low"].tolist()
     dif, dea = calc_macd_lists(closes)
-    sk, sd = _calc_skdj(highs, lows, closes)
-
-    macd_g = _macd_gold_crosses(dif, dea)
-    skdj_g = _skdj_gold_crosses(sk, sd)
-
-    WINDOW = 3
-    best_hi = -1
-
-    for m in macd_g:
-        for s in skdj_g:
-            if abs(m - s) > WINDOW:
-                continue
-            hi = max(m, s)
-            if hi <= best_hi:
-                continue
-            if not (dif[hi] > dea[hi]):
-                continue
-            if sk[hi] is None or sd[hi] is None or sk[hi] <= sd[hi]:
-                continue
-            if dif[hi - 1] >= dea[hi - 1] and dif[hi] < dea[hi]:
-                continue
-            if sk[hi - 1] >= sd[hi - 1] and sk[hi] < sd[hi]:
-                continue
-            best_hi = hi
-
-    if best_hi < 0:
+    sk, sd = calc_skdj_lists(highs, lows, closes)
+    best_hi = find_latest_dual_cross_bar(dif, dea, sk, sd)
+    if best_hi is None:
         return False, None
 
-    d = df["date"].iloc[best_hi]
+    d = klines_df.iloc[best_hi]["date"]
     date_str = d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)[:10]
     return True, date_str
 
@@ -179,6 +94,44 @@ def _parse_pe_pb(info: dict) -> tuple[float | None, float | None]:
     except (TypeError, ValueError):
         pb_f = None
     return pe_f, pb_f
+
+
+def _quotes_from_hot(hot_list: list[dict]) -> dict[str, dict]:
+    """从热门池种子行情，避免重复拉全量实时报价。"""
+    out: dict[str, dict] = {}
+    for item in hot_list:
+        code = _normalize_code(str(item.get("code") or ""))
+        if not code:
+            continue
+        out[code] = {
+            "price": float(item.get("price") or 0),
+            "change_pct": float(item.get("change_pct") or 0),
+            "volume": float(item.get("volume") or 0),
+            "amount": float(item.get("amount") or 0),
+            "name": item.get("name") or code,
+            "industry": None,
+            "pe": None,
+            "pb": None,
+        }
+    return out
+
+
+def _quote_map_from_seed(candidates: list[str], seed: dict[str, dict]) -> dict[str, dict]:
+    result: dict[str, dict] = {}
+    for code in candidates:
+        nc = _normalize_code(code)
+        base = seed.get(nc, {})
+        result[code] = {
+            "price": float(base.get("price") or 0),
+            "change_pct": float(base.get("change_pct") or 0),
+            "volume": float(base.get("volume") or 0),
+            "amount": float(base.get("amount") or 0),
+            "name": base.get("name") or code,
+            "industry": None,
+            "pe": None,
+            "pb": None,
+        }
+    return result
 
 
 def _get_quote_and_info(
@@ -289,12 +242,29 @@ def screen_stocks_stream(
 
     need_industry_name = industry is not None
     need_pe_pb = pe_max is not None or pb_max is not None
+    seed = _quotes_from_hot(hot_list)
 
-    quote_map = _get_quote_and_info(
-        candidates,
-        need_industry_name=need_industry_name,
-        need_pe_pb=need_pe_pb,
-    )
+    # 热门池已含涨跌幅/成交量；仅行业或 PE/PB 需额外拉行情与基本面
+    if need_industry_name or need_pe_pb:
+        quote_map = _get_quote_and_info(
+            candidates,
+            need_industry_name=need_industry_name,
+            need_pe_pb=need_pe_pb,
+        )
+        for code in candidates:
+            nc = _normalize_code(code)
+            if nc in seed:
+                s = seed[nc]
+                q = quote_map.get(code, {})
+                if not q.get("price"):
+                    q["price"] = s["price"]
+                if not q.get("change_pct") and s.get("change_pct") is not None:
+                    q["change_pct"] = s["change_pct"]
+                if not q.get("name"):
+                    q["name"] = s["name"]
+                quote_map[code] = q
+    else:
+        quote_map = _quote_map_from_seed(candidates, seed)
     t2 = time.time()
     log.info("选股行情和基本面完成 elapsed=%.1fs", t2 - t1)
 
@@ -350,13 +320,18 @@ def screen_stocks_stream(
             if analysis is None:
                 continue
 
+            if emitted_count >= max_results:
+                continue
+
             if signal_types:
                 if analysis["latest_signal"] is None:
                     continue
                 if analysis["latest_signal"].type not in signal_types:
                     continue
 
-            if require_dual_cross and not analysis["has_dual_cross"]:
+            has_dual_cross = analysis["has_dual_cross"]
+            dual_cross_date = analysis["dual_cross_date"]
+            if require_dual_cross and not has_dual_cross:
                 continue
 
             q = quote_map.get(code, {})
@@ -383,12 +358,15 @@ def screen_stocks_stream(
                     "latest_signal": sig.type if sig else None,
                     "latest_signal_date": sig_date_str,
                     "latest_signal_conf": sig_conf,
-                    "has_dual_cross": analysis["has_dual_cross"],
-                    "dual_cross_date": analysis["dual_cross_date"],
+                    "has_dual_cross": has_dual_cross,
+                    "dual_cross_date": dual_cross_date,
                     "trend": analysis["trend"],
                 },
             }
             if emitted_count >= max_results:
+                for pending in futures:
+                    if not pending.done():
+                        pending.cancel()
                 break
     finally:
         for future in futures:

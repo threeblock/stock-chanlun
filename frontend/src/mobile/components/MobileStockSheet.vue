@@ -110,12 +110,12 @@
 
             <!-- AI策略 Tab -->
             <div v-if="activeTab === 'ai'" class="tab-ai">
-              <MobileAIChat :stock-code="stockCode" />
+              <MobileAIChat v-if="modelValue" :stock-code="stockCode" />
             </div>
 
             <!-- 笔记 Tab -->
             <div v-if="activeTab === 'comment'" class="tab-comment">
-              <MobileCommentSection :stock-code="stockCode" />
+              <MobileCommentSection v-if="modelValue" :stock-code="stockCode" />
             </div>
 
           </div>
@@ -126,11 +126,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, defineAsyncComponent } from 'vue'
 import type { Quote, StockInfoFields, Signal, AISignal } from '@/api/stock'
 import { useCommentStore } from '@/stores/comment'
-import MobileCommentSection from './MobileCommentSection.vue'
-import MobileAIChat from './MobileAIChat.vue'
+import { useVolumeFormatter } from '@/composables/useFormatters'
+
+const MobileCommentSection = defineAsyncComponent(
+  () => import('./MobileCommentSection.vue'),
+)
+const MobileAIChat = defineAsyncComponent(() => import('./MobileAIChat.vue'))
 
 const props = defineProps<{
   modelValue: boolean
@@ -150,6 +154,7 @@ defineEmits<{
 }>()
 
 const commentStore = useCommentStore()
+const { formatVolume, formatAmount } = useVolumeFormatter()
 const commentCount = computed(() => commentStore.getComments(props.stockCode).length)
 
 const tabs = [
@@ -175,17 +180,11 @@ function signalBadgeClass(type: string) {
 }
 
 function fmtVol(v?: number) {
-  if (!v) return '—'
-  if (v >= 1e8) return (v / 1e8).toFixed(2) + '亿'
-  if (v >= 1e4) return (v / 1e4).toFixed(2) + '万'
-  return String(v)
+  return formatVolume(v ?? null)
 }
 
 function fmtAmt(v?: number) {
-  if (!v) return '—'
-  if (v >= 1e8) return (v / 1e8).toFixed(2) + '亿'
-  if (v >= 1e4) return (v / 1e4).toFixed(2) + '万'
-  return v.toFixed(0)
+  return formatAmount(v ?? null)
 }
 
 const infoRows = computed(() => {

@@ -334,6 +334,8 @@ import type { StockInfoFields, StockExtras, Quote } from '../api/stock'
 import toast from '../composables/useToast'
 import { resolveApiBaseURL } from '../api/stock'
 import { useStockPage } from '../composables/useStockPage'
+import { useVisibilityRefresh } from '../composables/useVisibilityRefresh'
+import { API_CACHE_TTL } from '../utils/apiCache'
 const KLineChart = defineAsyncComponent(
   () => import('../components/Chart/KLineChart.vue'),
 )
@@ -346,7 +348,7 @@ const AiSuspendedBallChat = defineAsyncComponent(
 )
 
 const route = useRoute()
-const { store, quote, stockInfo, extras, loadStock, changeLevel: changeLevelBase, refreshAIStrategy } = useStockPage()
+const { store, quote, stockInfo, extras, loadStock, changeLevel: changeLevelBase, refreshAIStrategy, refreshQuotes } = useStockPage()
 
 async function changeLevel(level: LevelOption) {
   await changeLevelBase(stockCode.value, level)
@@ -783,6 +785,11 @@ onMounted(() => {
   loadData()
   window.addEventListener('keydown', handleKeydown)
 })
+
+useVisibilityRefresh(
+  () => refreshQuotes(stockCode.value),
+  API_CACHE_TTL.quote,
+)
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown)

@@ -31,7 +31,7 @@
       </div>
 
       <!-- 加载中 -->
-      <div v-if="loading" class="skeleton-list">
+      <div v-if="loading && stocks.length === 0" class="skeleton-list">
         <div v-for="i in 12" :key="i" class="skeleton-row" />
       </div>
 
@@ -112,23 +112,20 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { stockApi, type SectorStock } from '@/api/stock'
+import type { SectorStock } from '@/api/stock'
 import { useWatchlistStore } from '@/stores/watchlist'
 import toast from '@/composables/useToast'
 import { useVirtualScroll } from '@/composables/useVirtualScroll'
+import { useSectorData } from '@/composables/useSectorData'
 
 const route = useRoute()
 const router = useRouter()
 const watchlistStore = useWatchlistStore()
 
 const sectorName = computed(() => String(route.params.name || ''))
-const stocks = ref<SectorStock[]>([])
-const total = ref(0)
-const boardType = ref<'industry' | 'concept' | null>(null)
-const loading = ref(true)
-const error = ref('')
+const { stocks, total, boardType, loading, error, fetchData } = useSectorData(sectorName)
 
 // 虚拟滚动（行业板块常有几百只成分股）
 const ROW_H = 48
@@ -166,23 +163,7 @@ function goToStock(code: string) {
   router.push(`/stock/${code}`)
 }
 
-async function fetchData() {
-  loading.value = true
-  error.value = ''
-  try {
-    const res = await stockApi.sectorStocks(sectorName.value)
-    stocks.value = res.data.stocks ?? []
-    total.value = res.data.total ?? 0
-    boardType.value = res.data.board_type as 'industry' | 'concept' | null
-  } catch (e: any) {
-    error.value = e?.message ?? '加载失败'
-  } finally {
-    loading.value = false
-  }
-}
-
 onMounted(() => {
-  fetchData()
   watchlistStore.fetchWatchlist()
 })
 </script>

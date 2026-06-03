@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, watch, computed } from 'vue'
 import { stockApi, type KLine, type ChanlunResult, type AISignal } from '../api/stock'
+import { peekApiCache } from '../utils/apiCache'
 
 export type LevelOption = '1min' | '5min' | '15min' | '30min' | '60min' | 'daily' | 'weekly' | 'monthly'
 
@@ -115,6 +116,26 @@ export const useChanlunStore = defineStore('chanlun', () => {
     return seq !== loadSeq
   }
 
+  function chanlunCacheKey(code: string, level: LevelOption) {
+    return `GET:/chanlun/${code}?level=${level}`
+  }
+
+  function aiSignalCacheKey(code: string, level: LevelOption, useLlm: boolean) {
+    const params = new URLSearchParams({ level, model: aiModel.value })
+    if (useLlm) params.set('use_llm', 'true')
+    return `GET:/chanlun/${code}/ai?${params.toString()}`
+  }
+
+  function applyChanlunPayload(data: ChanlunResult) {
+    chanlunResult.value = data
+    if (data.klines?.length) {
+      klines.value = data.klines
+      klineUpdatedAt.value = timeNow()
+    }
+    chanlunUpdatedAt.value = timeNow()
+    errorChanlun.value = null
+  }
+
   async function fetchKline(
     code: string,
     level: LevelOption = 'daily',
@@ -126,7 +147,8 @@ export const useChanlunStore = defineStore('chanlun', () => {
     klineAbort?.abort()
     klineAbort = new AbortController()
     const signal = klineAbort.signal
-    loadingKline.value = true
+    const showLoading = klines.value.length === 0
+    loadingKline.value = showLoading
     errorKline.value = null
     try {
       const res = await stockApi.kline(code, level, 500, startDate, endDate, { signal, force })
@@ -143,20 +165,28 @@ export const useChanlunStore = defineStore('chanlun', () => {
   }
 
   async function fetchChanlun(code: string, level: LevelOption = 'daily', seq?: number, force = false) {
+    const key = chanlunCacheKey(code, level)
+    let hadCached = false
+
+    if (!force) {
+      const peek = peekApiCache<{ data: ChanlunResult }>(key)
+      if (peek) {
+        hadCached = true
+        if (seq != null && isStale(seq)) return
+        applyChanlunPayload(peek.data.data)
+        if (!peek.isStale) return
+      }
+    }
+
     chanlunAbort?.abort()
     chanlunAbort = new AbortController()
     const signal = chanlunAbort.signal
-    loadingChanlun.value = true
+    loadingChanlun.value = !hadCached && klines.value.length === 0
     errorChanlun.value = null
     try {
       const res = await stockApi.chanlun(code, level, { signal, force })
       if (seq != null && isStale(seq)) return
-      chanlunResult.value = res.data
-      if (res.data.klines?.length) {
-        klines.value = res.data.klines
-        klineUpdatedAt.value = timeNow()
-      }
-      chanlunUpdatedAt.value = timeNow()
+      applyChanlunPayload(res.data)
     } catch (e: unknown) {
       if (isAbortError(e)) return
       if (seq != null && isStale(seq)) return
@@ -169,18 +199,45 @@ export const useChanlunStore = defineStore('chanlun', () => {
   async function fetchAISignal(
     code: string,
     level: LevelOption = 'daily',
-    options?: { useLlm?: boolean; seq?: number },
+    options?: { useLlm?: boolean; seq?: number; force?: boolean },
   ) {
+    const useLlm = options?.useLlm ?? false
+    const seq = options?.seq
+    const force = options?.force ?? false
+    const key = aiSignalCacheKey(code, level, useLlm)
+    let hadCached = false
+
+    if (!force) {
+      const peek = peekApiCache<{ data: AISignal }>(key)
+      if (peek) {
+        hadCached = true
+        if (seq != null && isStale(seq)) return
+        aiSignal.value = peek.data.data
+        aiUpdatedAt.value = timeNow()
+        errorAI.value = null
+        if (!peek.isStale) return
+        void stockApi
+          .aiSignal(code, level, aiModel.value, { useLlm, force: true })
+          .then(res => {
+            if (seq != null && isStale(seq)) return
+            aiSignal.value = res.data
+            aiUpdatedAt.value = timeNow()
+          })
+          .catch(() => { /* 保留 stale */ })
+        return
+      }
+    }
+
     aiAbort?.abort()
     aiAbort = new AbortController()
     const signal = aiAbort.signal
-    const seq = options?.seq
-    loadingAI.value = true
+    loadingAI.value = !hadCached && !aiSignal.value
     errorAI.value = null
     try {
       const res = await stockApi.aiSignal(code, level, aiModel.value, {
-        useLlm: options?.useLlm ?? false,
+        useLlm,
         signal,
+        force,
       })
       if (seq != null && isStale(seq)) return
       aiSignal.value = res.data
@@ -219,14 +276,14 @@ export const useChanlunStore = defineStore('chanlun', () => {
     }
 
     if (!isStale(seq)) {
-      void fetchAISignal(code, level, { useLlm: false, seq })
+      void fetchAISignal(code, level, { useLlm: false, seq, force: force })
     }
   }
 
   async function setAiModel(model: string, code: string) {
     aiModel.value = model
     await stockApi.setAiModel(model)
-    await fetchAISignal(code, currentLevel.value, { useLlm: true })
+    await fetchAISignal(code, currentLevel.value, { useLlm: true, force: true })
   }
 
   function toggleIndicator(key: keyof IndicatorConfig) {

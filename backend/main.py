@@ -19,7 +19,15 @@ from config import cors_allow_credentials, cors_allow_origins
 from routers import chanlun_routes, comments, diagnosis, stocks, system, watchlist
 from services.akshare_service import warm_hot_cache
 from stores.local_json import apply_startup_ai_model
-from utils import ai_signal_llm_cache, ai_signal_rule_cache, chanlun_cache, watchlist_quote_cache
+from utils import (
+    ai_signal_llm_cache,
+    ai_signal_rule_cache,
+    chanlun_cache,
+    market_overview_cache,
+    sector_board_cache,
+    stock_news_cache,
+    watchlist_quote_cache,
+)
 
 
 @asynccontextmanager
@@ -30,6 +38,9 @@ async def lifespan(_app: FastAPI):
     ai_signal_rule_cache.purge_expired()
     ai_signal_llm_cache.purge_expired()
     watchlist_quote_cache.purge_expired()
+    market_overview_cache.purge_expired()
+    sector_board_cache.purge_expired()
+    stock_news_cache.purge_expired()
     yield
 
 

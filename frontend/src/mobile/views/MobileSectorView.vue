@@ -15,7 +15,7 @@
     </div>
 
     <!-- 加载 -->
-    <div v-if="loading" class="loading-wrap">
+    <div v-if="loading && stocks.length === 0" class="loading-wrap">
       <div v-for="i in 10" :key="i" class="skeleton-card" />
     </div>
 
@@ -31,6 +31,46 @@
     </div>
 
     <!-- 成分股列表 -->
+    <div v-else-if="enableVirtualScroll" class="stock-list vscroll-wrap" v-bind="containerProps">
+      <div class="vscroll-spacer" v-bind="wrapperProps">
+        <div class="vscroll-inner" :style="{ transform: `translateY(${offsetY}px)` }">
+          <div
+            v-for="s in visibleItems"
+            :key="s.code"
+            class="stock-row"
+            :style="{ height: ROW_H + 'px' }"
+            @click="go(`/m/stock/${s.code}`)"
+          >
+            <div class="sr-rank">
+              <span class="rank-num" :class="rankClass(s.rank)">#{{ s.rank }}</span>
+            </div>
+            <div class="sr-left">
+              <div class="sr-name">{{ s.name }}</div>
+              <div class="sr-code mono">{{ s.code }}</div>
+            </div>
+            <div class="sr-right">
+              <div class="sr-price mono">{{ s.price > 0 ? s.price.toFixed(2) : '—' }}</div>
+              <div
+                class="sr-pct mono"
+                :class="s.change_pct >= 0 ? 'price-up' : s.change_pct < 0 ? 'price-down' : 'price-flat'"
+              >
+                {{ s.change_pct >= 0 ? '+' : '' }}{{ s.change_pct.toFixed(2) }}%
+              </div>
+            </div>
+            <button
+              class="watch-btn"
+              :class="{ added: isWatched(s.code) }"
+              @click.stop="toggleWatch(s.code)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div v-else class="stock-list">
       <div
         v-for="s in stocks"
@@ -72,22 +112,34 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { stockApi, type SectorStock } from '@/api/stock'
+import type { SectorStock } from '@/api/stock'
 import { useWatchlistStore } from '@/stores/watchlist'
 import toast from '@/composables/useToast'
 import PullRefresh from '@/mobile/components/PullRefresh.vue'
+import { useVirtualScroll } from '@/composables/useVirtualScroll'
+import { useSectorData } from '@/composables/useSectorData'
 
 const route = useRoute()
 const router = useRouter()
 const wlStore = useWatchlistStore()
 
 const sectorName = computed(() => String(route.params.name || ''))
-const stocks = ref<SectorStock[]>([])
-const total = ref(0)
-const boardType = ref<'industry' | 'concept' | null>(null)
-const loading = ref(false)
+const { stocks, total, boardType, loading, error, fetchData } = useSectorData(sectorName)
 const refreshing = ref(false)
-const error = ref('')
+
+const ROW_H = 64
+const enableVirtualScroll = computed(() => stocks.value.length > 40)
+const {
+  visibleItems,
+  containerProps,
+  wrapperProps,
+  offsetY,
+} = useVirtualScroll<SectorStock>({
+  items: stocks,
+  itemHeight: ROW_H,
+  overscan: 5,
+  maxHeight: 560,
+})
 
 const watchedCodes = computed(() => new Set(wlStore.stocks.map(s => s.code)))
 function isWatched(code: string) { return watchedCodes.value.has(code) }
@@ -115,29 +167,16 @@ function rankClass(rank: number): string {
 
 function go(path: string) { router.push(path) }
 
-async function fetchData() {
-  loading.value = true
-  error.value = ''
+async function handleRefresh() {
+  refreshing.value = true
   try {
-    const res = await stockApi.sectorStocks(sectorName.value)
-    stocks.value = res.data.stocks ?? []
-    total.value = res.data.total ?? 0
-    boardType.value = res.data.board_type as 'industry' | 'concept' | null
-  } catch (e: any) {
-    error.value = e?.message ?? '加载失败'
+    await fetchData(true)
   } finally {
-    loading.value = false
+    refreshing.value = false
   }
 }
 
-async function handleRefresh() {
-  refreshing.value = true
-  await fetchData()
-  refreshing.value = false
-}
-
 onMounted(() => {
-  fetchData()
   wlStore.fetchWatchlist()
 })
 </script>
@@ -259,4 +298,11 @@ onMounted(() => {
 }
 .watch-btn.added { color: var(--accent-red); }
 .watch-btn:not(.added):hover { color: var(--accent-red); }
+
+.vscroll-wrap {
+  max-height: 560px;
+  overflow-y: auto;
+}
+.vscroll-spacer { position: relative; }
+.vscroll-inner { width: 100%; }
 </style>

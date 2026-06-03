@@ -85,31 +85,39 @@
 
       <div class="filter-actions">
         <button class="btn btn-ghost" @click="resetFilters">重置</button>
-        <button class="btn btn-primary" @click="doScreen" :disabled="screening">
-          {{ screening ? '筛选中...' : '开始筛选' }}
+        <button v-if="screening" type="button" class="btn btn-ghost stop-screen-btn" @click="stopScreen">
+          停止筛选
+        </button>
+        <button v-else type="button" class="btn btn-primary" @click="doScreen">
+          开始筛选
         </button>
       </div>
     </div>
 
     <div v-if="screening" class="results-loading">
+      <p v-if="isRetrying && screenError" class="retry-hint">{{ screenError }}</p>
       <div class="progress-wrap">
         <div class="progress-bar">
           <div class="progress-fill" :style="{ width: progressPct + '%' }" />
         </div>
         <span class="progress-text">{{ progressDone }} / {{ progressTotal }} 只</span>
       </div>
-      <div class="spinner" />
-      <span>筛选分析中...</span>
+      <p v-if="results.length > 0" class="partial-hint">已命中 {{ results.length }} 只，可提前停止</p>
+      <button type="button" class="btn btn-ghost btn-sm" @click="stopScreen">停止筛选</button>
+      <div v-if="results.length === 0" class="spinner" />
+      <span>{{ isRetrying ? '正在重连…' : results.length > 0 ? '持续筛选中…' : '筛选分析中...' }}</span>
     </div>
 
-    <div v-else-if="screenError" class="results-error">
+    <div v-else-if="screenError && results.length === 0" class="results-error">
       <p>{{ screenError }}</p>
       <button class="btn btn-ghost" @click="doScreen">重试</button>
     </div>
 
-    <template v-else-if="results.length > 0">
+    <template v-if="results.length > 0">
+      <p v-if="screenError" class="partial-hint">{{ screenError }}</p>
       <div class="results-head">
         <span class="results-count">共 <b>{{ total }}</b> 支符合条件的股票</span>
+        <button type="button" class="btn btn-ghost btn-sm export-btn" @click="exportResults">导出</button>
       </div>
       <div class="results-list">
         <button
@@ -150,9 +158,19 @@
 <script setup lang="ts">
 import { ref, reactive, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { resolveApiBaseURL, stockApi, type StockScreenResult } from '@/api/stock'
+import { useScreenStream } from '@/composables/useScreenStream'
+import { downloadScreenResultsCsv } from '@/utils/exportScreenCsv'
 
 const router = useRouter()
+const {
+  loading: screening,
+  screenError,
+  isRetrying,
+  results,
+  progress,
+  runScreen: runScreenStream,
+  stopScreen,
+} = useScreenStream()
 
 const signalOptions = [
   { label: '一买', value: '一买' },
@@ -173,12 +191,9 @@ const filters = reactive({
   signals: '',
 })
 
-const results = ref<StockScreenResult[]>([])
-const total = ref(0)
-const screening = ref(false)
-const screenError = ref('')
-const progressDone = ref(0)
-const progressTotal = ref(0)
+const total = computed(() => results.value.length)
+const progressDone = computed(() => progress.value.done)
+const progressTotal = computed(() => progress.value.total)
 const PAGE_SIZE = 20
 const displayLimit = ref(PAGE_SIZE)
 const progressPct = computed(() => {
@@ -195,76 +210,30 @@ function resetFilters() {
   filters.pb_max = undefined
   filters.signals = ''
   results.value = []
-  total.value = 0
 }
 
 async function doScreen() {
-  screening.value = true
-  screenError.value = ''
-  results.value = []
   displayLimit.value = PAGE_SIZE
-  progressDone.value = 0
-  progressTotal.value = 0
-  const params: Parameters<typeof stockApi.screenStocks>[0] = {}
-  if (filters.change_pct_min != null) params.change_pct_min = filters.change_pct_min
-  if (filters.change_pct_max != null) params.change_pct_max = filters.change_pct_max
-  if (filters.volume_min != null) params.volume_min = filters.volume_min
-  if (filters.volume_max != null) params.volume_max = filters.volume_max
-  if (filters.pe_max != null) params.pe_max = filters.pe_max
-  if (filters.pb_max != null) params.pb_max = filters.pb_max
-  if (filters.signals) params.signals = filters.signals
-  try {
-    const p = { ...params, level: 'daily', pool_size: 100 }
-    const qs = new URLSearchParams()
-    qs.set('level', 'daily')
-    qs.set('pool_size', '100')
-    qs.set('max_results', '50')
-    if (p.change_pct_min != null) qs.set('change_pct_min', String(p.change_pct_min))
-    if (p.change_pct_max != null) qs.set('change_pct_max', String(p.change_pct_max))
-    if (p.volume_min != null) qs.set('volume_min', String(p.volume_min))
-    if (p.volume_max != null) qs.set('volume_max', String(p.volume_max))
-    if (p.pe_max != null) qs.set('pe_max', String(p.pe_max))
-    if (p.pb_max != null) qs.set('pb_max', String(p.pb_max))
-    if (p.signals) qs.set('signals', p.signals)
-    const resp = await fetch(`${resolveApiBaseURL()}/stocks/screen-stream?${qs.toString()}`)
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-    const reader = resp.body!.getReader()
-    const decoder = new TextDecoder()
-    let buf = ''
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buf += decoder.decode(value, { stream: true })
-      const lines = buf.split('\n')
-      buf = lines.pop() ?? ''
-      for (const line of lines) {
-        const raw = line.trim()
-        if (!raw.startsWith('data: ')) continue
-        try {
-          const item = JSON.parse(raw.slice(6))
-          if (item.type === 'progress') {
-            progressDone.value = item.done
-            progressTotal.value = item.total
-          } else if (item.type === 'result') {
-            results.value.push(item.data as StockScreenResult)
-          } else if (item.type === 'done') {
-            total.value = results.value.length
-            screening.value = false
-            return
-          }
-        } catch {/* ignore */}
-      }
-    }
-  } catch (e: any) {
-    screenError.value = e?.message ?? '筛选失败，请检查网络后重试'
-    results.value = []
-  } finally {
-    screening.value = false
-  }
+  await runScreenStream({
+    change_pct_min: filters.change_pct_min,
+    change_pct_max: filters.change_pct_max,
+    volume_min: filters.volume_min,
+    volume_max: filters.volume_max,
+    pe_max: filters.pe_max,
+    pb_max: filters.pb_max,
+    signals: filters.signals || undefined,
+    level: 'daily',
+    pool_size: 100,
+    max_results: 50,
+  })
 }
 
 function go(path: string) {
   router.push(path)
+}
+
+function exportResults() {
+  downloadScreenResultsCsv(results.value)
 }
 
 function fmtVol(v?: number) {
@@ -397,6 +366,20 @@ function signalBadgeClass(type: string) {
   padding: 40px 0;
   color: var(--text-secondary);
   font-size: 0.875rem;
+}
+
+.retry-hint,
+.partial-hint {
+  margin: 0;
+  width: 100%;
+  max-width: 300px;
+  padding: 8px 10px;
+  font-size: 0.78rem;
+  text-align: center;
+  color: var(--accent-amber, #f59e0b);
+  background: rgba(245, 158, 11, 0.08);
+  border-radius: 6px;
+  border: 1px solid rgba(245, 158, 11, 0.25);
 }
 .spinner {
   width: 28px;

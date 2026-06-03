@@ -51,7 +51,8 @@ import echarts from '../../utils/echarts'
 import type { KLine, Bi, XiangSegment, Zhongshu, Signal, AISignal, SupportResistance } from '@/api/stock'
 import type { IndicatorConfig } from '@/stores/chanlun'
 import { calcMA, computeDualMacdSkdjMarkerIndices } from '@/utils/stockIndicators'
-import { downsampleKlines } from '@/utils/chartDownsample'
+import { downsampleKlines, klineSeriesSignature } from '@/utils/chartDownsample'
+import { setChartOptionKeepDataZoom } from '@/utils/chartEchartsHelpers'
 import { useDebouncedCallback } from '@/composables/useDebounce'
 import { useKlineIndicators } from '@/composables/useKlineIndicators'
 import {
@@ -459,16 +460,44 @@ function initChart() {
   chart.on('finished', () => queueGraphic())
 }
 
+let lastKlineSig = ''
+
+function getContainerHeight(): number {
+  return chartRef.value?.clientHeight || 300
+}
+
+function applyKlineUpdate() {
+  const sig = klineSeriesSignature(props.klines)
+  if (sig === lastKlineSig) return
+  lastKlineSig = sig
+  updateChart()
+}
+
 function updateChart() {
   if (!chart) { initChart(); return }
-  chart.setOption(buildOption(chartRef.value?.clientHeight || 300))
-  setBarInfoByIndex(props.klines.length - 1)
+  setChartOptionKeepDataZoom(chart, buildOption(getContainerHeight()), true)
+  setBarInfoByIndex(displayKlines.value.length - 1)
   overlayCache = buildOverlayData()
   queueGraphic()
 }
 
-function getContainerHeight(): number {
-  return chartRef.value?.clientHeight || 300
+function updateMaIndicators() {
+  if (!chart) return
+  setChartOptionKeepDataZoom(chart, buildOption(getContainerHeight()), true)
+  setBarInfoByIndex(displayKlines.value.length - 1)
+}
+
+function updateOverlayOnly() {
+  overlayCache = buildOverlayData()
+  queueGraphic()
+}
+
+function updateIndicatorOption() {
+  if (!chart) return
+  setChartOptionKeepDataZoom(chart, buildOption(getContainerHeight()), true)
+  setBarInfoByIndex(displayKlines.value.length - 1)
+  overlayCache = buildOverlayData()
+  queueGraphic()
 }
 
 const onResize = useDebouncedCallback(() => {
@@ -552,14 +581,9 @@ function onTouchEnd(e: TouchEvent) {
   isScrolling = false
 }
 
-function updateOverlayOnly() {
-  overlayCache = buildOverlayData()
-  queueGraphic()
-}
-
 watch(
   () => props.klines,
-  updateChart
+  applyKlineUpdate
 )
 
 watch(
@@ -569,14 +593,34 @@ watch(
 )
 
 watch(
-  () => props.indicators,
-  () => {
-    if (!chart) return
-    chart.setOption(buildOption(), { replaceMerge: ['graphic'] })
-    overlayCache = buildOverlayData()
-    queueGraphic()
-  },
-  { deep: true }
+  () => [
+    props.indicators?.bis,
+    props.indicators?.xiangs,
+    props.indicators?.zhongshus,
+    props.indicators?.signals,
+    props.indicators?.aiLines,
+    props.indicators?.supportResistance,
+  ],
+  updateOverlayOnly,
+)
+
+watch(
+  () => [
+    props.indicators?.ma5,
+    props.indicators?.ma20,
+    props.indicators?.ma60,
+  ],
+  updateMaIndicators,
+)
+
+watch(
+  () => [
+    props.indicators?.volume,
+    props.indicators?.macd,
+    props.indicators?.rsi,
+    props.indicators?.skdj,
+  ],
+  updateIndicatorOption,
 )
 </script>
 

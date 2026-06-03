@@ -30,6 +30,47 @@
       <p class="empty-hint">在个股页面点击「+自选」添加</p>
     </div>
 
+    <div v-else-if="enableVirtualScroll" class="stock-list vscroll-wrap" v-bind="containerProps">
+      <div class="vscroll-spacer" v-bind="wrapperProps">
+        <div class="vscroll-inner" :style="{ transform: `translateY(${offsetY}px)` }">
+          <button
+            v-for="s in visibleItems"
+            :key="s.code"
+            class="stock-row"
+            :style="{ height: ROW_H + 'px' }"
+            @click="go(`/m/stock/${s.code}`)"
+          >
+            <div class="sr-left">
+              <div class="sr-name">{{ s.name || s.code }}</div>
+              <div class="sr-code-row">
+                <span class="sr-code mono">{{ s.code }}</span>
+                <span v-if="s.added_at" class="sr-added">{{ fmtAdded(s.added_at) }}</span>
+              </div>
+            </div>
+            <div class="sr-center">
+              <div class="sr-price mono">{{ s.price > 0 ? s.price.toFixed(2) : '—' }}</div>
+              <div class="sr-vol">{{ fmtVol(s.volume) }}</div>
+            </div>
+            <div class="sr-right">
+              <div
+                class="sr-pct mono"
+                :class="s.change_pct > 0 ? 'price-up' : s.change_pct < 0 ? 'price-down' : 'price-flat'"
+              >{{ s.change_pct > 0 ? '+' : '' }}{{ s.change_pct.toFixed(2) }}%</div>
+              <button
+                class="remove-btn"
+                @click.stop="remove(s.code)"
+                title="删除自选"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                </svg>
+              </button>
+            </div>
+          </button>
+        </div>
+      </div>
+    </div>
+
     <div v-else class="stock-list">
       <button
         v-for="s in store.stocks"
@@ -70,15 +111,33 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted, toRef } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWatchlistStore } from '@/stores/watchlist'
 import toast from '@/composables/useToast'
 import PullRefresh from '@/mobile/components/PullRefresh.vue'
+import { useVirtualScroll } from '@/composables/useVirtualScroll'
+import { useVisibilityRefresh } from '@/composables/useVisibilityRefresh'
+
+const AUTO_REFRESH_INTERVAL = 2 * 60 * 1000
 
 const router = useRouter()
 const store = useWatchlistStore()
 const refreshing = ref(false)
+
+const ROW_H = 72
+const enableVirtualScroll = computed(() => store.stocks.length > 30)
+const {
+  visibleItems,
+  containerProps,
+  wrapperProps,
+  offsetY,
+} = useVirtualScroll({
+  items: toRef(store, 'stocks'),
+  itemHeight: ROW_H,
+  overscan: 4,
+  maxHeight: 560,
+})
 
 function fmtVol(v?: number) {
   if (!v) return '—'
@@ -115,7 +174,7 @@ async function remove(code: string) {
 async function handleRefresh() {
   refreshing.value = true
   try {
-    await store.fetchWatchlist()
+    await store.fetchWatchlist(true)
   } catch (e: any) {
     toast.error(e.message || '刷新失败，请检查网络')
   } finally {
@@ -126,6 +185,10 @@ async function handleRefresh() {
 onMounted(() => {
   store.fetchWatchlist()
 })
+
+useVisibilityRefresh(async () => {
+  await store.fetchWatchlist(true)
+}, AUTO_REFRESH_INTERVAL)
 </script>
 
 <style scoped>
@@ -313,4 +376,11 @@ onMounted(() => {
   color: var(--accent-red);
   background: rgba(239, 68, 68, 0.1);
 }
+
+.vscroll-wrap {
+  max-height: 560px;
+  overflow-y: auto;
+}
+.vscroll-spacer { position: relative; }
+.vscroll-inner { width: 100%; }
 </style>

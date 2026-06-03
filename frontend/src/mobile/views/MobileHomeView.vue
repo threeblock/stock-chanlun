@@ -175,7 +175,7 @@ function go(path: string) {
   router.push(path)
 }
 
-useVisibilityRefresh(() => refreshAll(), AUTO_REFRESH_INTERVAL)
+useVisibilityRefresh(() => refreshAll(false), AUTO_REFRESH_INTERVAL)
 
 onMounted(async () => {
   await refreshAll(true)

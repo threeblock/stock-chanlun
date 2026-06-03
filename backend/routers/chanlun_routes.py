@@ -153,6 +153,7 @@ def build_ai_signal_response(code: str, level: str, model: str, use_llm: bool) -
             daily_result = chanlun_cache.get(daily_key)
             if daily_result is None:
                 daily_result = run_analysis(code, "daily", kline_limit=DEFAULT_KLINE_LIMIT)
+                chanlun_cache.set(daily_key, daily_result)
             if daily_result is not None:
                 daily_cls = WaveClassifier().classify(
                     daily_result.xiangs,
