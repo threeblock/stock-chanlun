@@ -1,4 +1,9 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import {
+  prefetchMultiLevelChanlun,
+  prefetchStockChanlun,
+  prefetchStockRouteChunks,
+} from '../utils/prefetchStock'
 
 const router = createRouter({
   // 与 vite.config.ts 的 base: '/stock-chanlun/' 保持一致
@@ -28,6 +33,17 @@ const router = createRouter({
       ],
     },
   ],
+})
+
+router.beforeEach(to => {
+  const code = typeof to.params.code === 'string' ? to.params.code : ''
+  if (!/^\d{6}$/.test(code)) return true
+  if (to.path.startsWith('/stock/') || to.path.startsWith('/m/stock/')) {
+    prefetchStockRouteChunks()
+    prefetchStockChanlun(code)
+    prefetchMultiLevelChanlun(code)
+  }
+  return true
 })
 
 export default router

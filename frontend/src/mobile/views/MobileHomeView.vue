@@ -68,6 +68,7 @@
             class="sector-chip"
             :class="s.change_pct >= 0 ? 'chip-up' : 'chip-down'"
             @click="go(`/m/sector/${encodeURIComponent(s.name)}`)"
+            v-bind="sectorLinkPrefetchHandlers(s.name)"
           >
             <span class="chip-name">{{ s.name }}</span>
             <span class="chip-pct mono"
@@ -92,6 +93,7 @@
             :key="s.code"
             class="hot-card"
             @click="go(`/m/stock/${s.code}`)"
+            v-bind="stockLinkPrefetchHandlers(s.code)"
           >
             <div class="hot-left">
               <span class="hot-rank">{{ s.rank }}</span>
@@ -145,6 +147,7 @@ import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useHomeDashboard, formatNewsTime } from '@/composables/useHomeDashboard'
 import { useVisibilityRefresh } from '@/composables/useVisibilityRefresh'
+import { stockLinkPrefetchHandlers, sectorLinkPrefetchHandlers } from '@/utils/prefetchStock'
 
 const router = useRouter()
 const AUTO_REFRESH_INTERVAL = 5 * 60 * 1000
@@ -178,7 +181,7 @@ function go(path: string) {
 useVisibilityRefresh(() => refreshAll(false), AUTO_REFRESH_INTERVAL)
 
 onMounted(async () => {
-  await refreshAll(true)
+  await refreshAll(false)
 })
 </script>
 

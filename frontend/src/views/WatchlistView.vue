@@ -31,7 +31,7 @@
         </button>
       </div>
 
-      <div v-if="store.loading" class="loading-state">
+      <div v-if="store.loading && store.stocks.length === 0" class="loading-state">
         <div class="spinner" />
         <span>加载中...</span>
       </div>
@@ -63,25 +63,55 @@
           </span>
           <span></span>
         </div>
+        <div v-if="enableVirtualScroll" class="vscroll-wrap" v-bind="containerProps">
+          <div class="vscroll-spacer" v-bind="wrapperProps">
+            <div class="vscroll-inner" :style="{ transform: `translateY(${offsetY}px)` }">
+              <div
+                v-for="stock in visibleItems"
+                :key="stock.code"
+                class="table-row"
+                :style="{ height: ROW_H + 'px' }"
+                @click="goToStock(stock.code)"
+                v-bind="stockLinkPrefetchHandlers(stock.code)"
+              >
+                <span class="mono">{{ stock.code }}</span>
+                <span class="name">{{ stock.name }}</span>
+                <span class="mono">{{ stock.price?.toFixed(2) || '—' }}</span>
+                <span class="mono" :class="stock.change_pct > 0 ? 'price-up' : 'price-down'">
+                  {{ stock.change_pct > 0 ? '+' : '' }}{{ stock.change_pct?.toFixed(2) || 0 }}%
+                </span>
+                <span class="added-time">{{ formatAddedTime(stock.added_at) }}</span>
+                <button class="remove-btn" @click.stop="removeStock(stock.code)">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18 6L6 18M6 6l12 12"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <template v-else>
           <div
             v-for="stock in sortedStocks"
             :key="stock.code"
             class="table-row"
             @click="goToStock(stock.code)"
+            v-bind="stockLinkPrefetchHandlers(stock.code)"
           >
-          <span class="mono">{{ stock.code }}</span>
-          <span class="name">{{ stock.name }}</span>
-          <span class="mono">{{ stock.price?.toFixed(2) || '—' }}</span>
-          <span class="mono" :class="stock.change_pct > 0 ? 'price-up' : 'price-down'">
-            {{ stock.change_pct > 0 ? '+' : '' }}{{ stock.change_pct?.toFixed(2) || 0 }}%
-          </span>
-          <span class="added-time">{{ formatAddedTime(stock.added_at) }}</span>
-          <button class="remove-btn" @click.stop="removeStock(stock.code)">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M18 6L6 18M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
+            <span class="mono">{{ stock.code }}</span>
+            <span class="name">{{ stock.name }}</span>
+            <span class="mono">{{ stock.price?.toFixed(2) || '—' }}</span>
+            <span class="mono" :class="stock.change_pct > 0 ? 'price-up' : 'price-down'">
+              {{ stock.change_pct > 0 ? '+' : '' }}{{ stock.change_pct?.toFixed(2) || 0 }}%
+            </span>
+            <span class="added-time">{{ formatAddedTime(stock.added_at) }}</span>
+            <button class="remove-btn" @click.stop="removeStock(stock.code)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M18 6L6 18M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+        </template>
       </div>
     </div>
   </div>
@@ -90,9 +120,13 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import type { Quote } from '../api/stock'
 import { useWatchlistStore } from '../stores/watchlist'
 import toast from '../composables/useToast'
 import { useVisibilityRefresh } from '../composables/useVisibilityRefresh'
+import { stockLinkPrefetchHandlers } from '../utils/prefetchStock'
+import { useVirtualScroll } from '../composables/useVirtualScroll'
+import { sortRows } from '../utils/sortRows'
 
 const router = useRouter()
 const store = useWatchlistStore()
@@ -116,20 +150,17 @@ function sortIcon(key: string): string {
   return sortDir.value === 'asc' ? '▲' : '▼'
 }
 
-const sortedStocks = computed(() => {
-  const list = [...store.stocks]
-  const key = sortKey.value
-  const dir = sortDir.value === 'asc' ? 1 : -1
-  list.sort((a, b) => {
-    const av = a[key as keyof typeof a]
-    const bv = b[key as keyof typeof b]
-    if (av == null && bv == null) return 0
-    if (av == null) return 1
-    if (bv == null) return -1
-    if (typeof av === 'string' && typeof bv === 'string') return av.localeCompare(bv) * dir
-    return ((av as number) - (bv as number)) * dir
-  })
-  return list
+const sortedStocks = computed(() =>
+  sortRows<Quote>([...store.stocks], sortKey.value as keyof Quote, sortDir.value),
+)
+
+const ROW_H = 48
+const enableVirtualScroll = computed(() => sortedStocks.value.length > 30)
+const { visibleItems, containerProps, wrapperProps, offsetY } = useVirtualScroll({
+  items: sortedStocks,
+  itemHeight: ROW_H,
+  overscan: 5,
+  maxHeight: 560,
 })
 
 function formatTime(d: Date): string {
@@ -182,7 +213,7 @@ async function removeStock(code: string) {
 }
 
 useVisibilityRefresh(async () => {
-  await store.fetchWatchlist(true)
+  await store.fetchWatchlist(false)
 }, AUTO_REFRESH_INTERVAL)
 
 onMounted(() => {
@@ -241,12 +272,22 @@ onMounted(() => {
   border-radius: 8px;
 }
 .table-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   background: var(--bg-secondary);
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--text-muted);
 }
+.vscroll-wrap {
+  overflow-y: auto;
+  max-height: 560px;
+  scrollbar-width: thin;
+}
+.vscroll-spacer { position: relative; }
+.vscroll-inner { width: 100%; }
 .sort-col {
   display: flex;
   align-items: center;

@@ -316,6 +316,7 @@
           :signal="store.aiSignal"
           :updated-at="store.aiUpdatedAt"
           :loading="store.loadingAI"
+          :level-trends="levelTrends"
           @deep-analyze="onDeepAnalyze"
         />
       </aside>
@@ -334,6 +335,7 @@ import type { StockInfoFields, StockExtras, Quote } from '../api/stock'
 import toast from '../composables/useToast'
 import { resolveApiBaseURL } from '../api/stock'
 import { useStockPage } from '../composables/useStockPage'
+import { useMultiLevelTrends } from '../composables/useMultiLevelTrends'
 import { useVisibilityRefresh } from '../composables/useVisibilityRefresh'
 import { API_CACHE_TTL } from '../utils/apiCache'
 const KLineChart = defineAsyncComponent(
@@ -362,6 +364,7 @@ const isWatching = computed(() =>
 )
 
 const stockCode = computed(() => route.params.code as string)
+const { levelTrends } = useMultiLevelTrends(stockCode)
 const currentLevel = computed(() => store.currentLevel)
 const loadingAny = computed(() =>
   store.loadingKline || store.loadingChanlun

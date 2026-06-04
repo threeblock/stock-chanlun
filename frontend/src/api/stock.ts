@@ -508,6 +508,26 @@ export const stockApi = {
     )
   },
 
+  chanlunMultiLevel(
+    code: string,
+    levels = 'daily,weekly,30min',
+    options?: GetCacheOptions,
+  ) {
+    const key = `GET:/chanlun/${code}/multi-level?levels=${levels}`
+    return withGetCached(
+      key,
+      API_CACHE_TTL.chanlunMulti,
+      () =>
+        api.get<{
+          code: string
+          levels: Record<string, unknown>
+          count: number
+          elapsed_ms: number
+        }>(`/chanlun/${code}/multi-level?levels=${encodeURIComponent(levels)}`),
+      options,
+    )
+  },
+
   aiSignal(
     code: string,
     level: string,
@@ -553,8 +573,13 @@ export const stockApi = {
     return api.delete(`/watchlist/${code}`)
   },
 
-  getSettings() {
-    return api.get<{ ai_model: string }>('/settings')
+  getSettings(options?: GetCacheOptions) {
+    return withGetCached(
+      'GET:/settings',
+      API_CACHE_TTL.settings,
+      () => api.get<{ ai_model: string }>('/settings'),
+      options,
+    )
   },
 
   setAiModel(model: string) {

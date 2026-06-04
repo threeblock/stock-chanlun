@@ -62,25 +62,35 @@
       <div class="mini-spinner" />
       <span>搜索中...</span>
     </div>
-    <div v-else-if="searched && results.length === 0" class="search-empty">
+    <div v-else-if="searched && results.length === 0 && searchErrorCode !== 'error'" class="search-empty">
       未找到「{{ keyword }}」相关股票
+    </div>
+    <div v-else-if="searchErrorCode === 'error'" class="search-empty">
+      搜索失败，请稍后重试
     </div>
   </header>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
-import { stockApi } from '@/api/stock'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { useDebouncedStockSearch } from '@/composables/useDebouncedStockSearch'
 
 const emit = defineEmits<{ search: [code: string] }>()
 
 const keyword = ref('')
-const results = ref<{ code: string; name: string }[]>([])
 const searched = ref(false)
-const searching = ref(false)
 const history = ref<string[]>(JSON.parse(localStorage.getItem('m_search_history') || '[]'))
 const showHistory = ref(false)
 let searchTimer: ReturnType<typeof setTimeout> | null = null
+
+const {
+  results,
+  loading: searching,
+  errorCode: searchErrorCode,
+  runQuery,
+  searchImmediate,
+  clear: clearSearch,
+} = useDebouncedStockSearch(300)
 
 function focus() {
   const input = document.querySelector('.search-input') as HTMLInputElement
@@ -90,28 +100,32 @@ function focus() {
 defineExpose({ focus })
 
 function onInput() {
-  results.value = []
   searched.value = false
-  showHistory.value = true
-  if (searchTimer) clearTimeout(searchTimer)
-  searchTimer = setTimeout(() => { showHistory.value = false }, 300)
+  const q = keyword.value.trim()
+  if (!q) {
+    clearSearch()
+    showHistory.value = true
+    return
+  }
+  showHistory.value = false
+  if (q.length >= 2) runQuery(keyword.value)
+  else clearSearch()
 }
+
+watch(keyword, (val) => {
+  if (!val.trim()) {
+    clearSearch()
+    searched.value = false
+  }
+})
 
 async function doSearch() {
   if (!keyword.value.trim()) return
   saveHistory(keyword.value.trim())
-  searching.value = true
   searched.value = false
-  results.value = []
-  try {
-    const res = await stockApi.search(keyword.value.trim())
-    results.value = res.data.stocks ?? []
-  } catch {
-    results.value = []
-  } finally {
-    searched.value = true
-    searching.value = false
-  }
+  showHistory.value = false
+  await searchImmediate(keyword.value)
+  searched.value = true
 }
 
 function select(code: string) {

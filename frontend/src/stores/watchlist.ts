@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import { stockApi, type Quote } from '../api/stock'
-import { invalidateApiCache } from '../utils/apiCache'
+import { invalidateApiCache, peekApiCache, API_CACHE_TTL } from '../utils/apiCache'
 
 const STORAGE_KEY = 'chanstock_watchlist_v2'
 
@@ -47,14 +47,34 @@ export const useWatchlistStore = defineStore('watchlist', () => {
   )
 
   async function fetchWatchlist(force = false) {
-    if (
-      !force &&
-      lastUpdated.value &&
-      Date.now() - lastUpdated.value.getTime() < 30_000
-    ) {
-      return
+    const cacheKey = 'GET:/watchlist'
+
+    if (!force) {
+      const peek = peekApiCache<{ data: { stocks?: Quote[] } }>(cacheKey)
+      if (peek) {
+        stocks.value = peek.data.data.stocks ?? stocks.value
+        lastUpdated.value = new Date()
+        error.value = null
+        if (!peek.isStale) return
+        try {
+          const res = await stockApi.watchlist({ force: true })
+          stocks.value = res.data.stocks || []
+          lastUpdated.value = new Date()
+        } catch {
+          /* 保留 stale */
+        }
+        return
+      }
+      if (
+        lastUpdated.value &&
+        Date.now() - lastUpdated.value.getTime() < API_CACHE_TTL.watchlist * 0.7
+      ) {
+        return
+      }
     }
-    loading.value = true
+
+    const showSkeleton = stocks.value.length === 0
+    if (showSkeleton) loading.value = true
     error.value = null
     try {
       const res = await stockApi.watchlist({ force })

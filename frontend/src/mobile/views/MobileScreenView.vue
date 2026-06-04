@@ -119,38 +119,87 @@
         <span class="results-count">共 <b>{{ total }}</b> 支符合条件的股票</span>
         <button type="button" class="btn btn-ghost btn-sm export-btn" @click="exportResults">导出</button>
       </div>
-      <div class="results-list">
+      <div class="sort-bar">
         <button
-          v-for="s in results.slice(0, displayLimit)"
-          :key="s.code"
-          class="result-row"
-          @click="go(`/m/stock/${s.code}`)"
+          v-for="opt in sortOptions"
+          :key="opt.key"
+          type="button"
+          class="sort-chip"
+          :class="{ active: sortKey === opt.key }"
+          @click="cycleSort(opt.key)"
         >
-          <div class="rr-left">
-            <div class="rr-name">{{ s.name }}</div>
-            <div class="rr-meta">
-              <span class="rr-code mono">{{ s.code }}</span>
-              <span v-if="s.industry" class="rr-industry">{{ s.industry }}</span>
-            </div>
-          </div>
-          <div class="rr-center">
-            <div class="rr-price mono">{{ s.price > 0 ? s.price.toFixed(2) : '—' }}</div>
-            <div class="rr-vol">{{ fmtVol(s.volume) }}</div>
-          </div>
-          <div class="rr-right">
-            <div
-              class="rr-pct mono"
-              :class="s.change_pct > 0 ? 'price-up' : s.change_pct < 0 ? 'price-down' : 'price-flat'"
-            >{{ s.change_pct > 0 ? '+' : '' }}{{ s.change_pct.toFixed(2) }}%</div>
-            <span v-if="s.latest_signal" class="rr-signal badge" :class="signalBadgeClass(s.latest_signal)">
-              {{ s.latest_signal }}
-            </span>
-          </div>
+          {{ opt.label }}{{ sortKey === opt.key ? (sortDir === 'desc' ? ' ↓' : ' ↑') : '' }}
         </button>
       </div>
-      <button v-if="results.length > displayLimit" class="load-more-btn" @click="displayLimit += PAGE_SIZE">
-        加载更多（{{ results.length - displayLimit }} 条）
-      </button>
+      <div
+        class="results-list"
+        :class="{ 'vscroll-wrap': enableVirtualScroll }"
+        v-bind="enableVirtualScroll ? containerProps : {}"
+      >
+        <div v-if="enableVirtualScroll" class="vscroll-spacer" v-bind="wrapperProps">
+          <div class="vscroll-inner" :style="{ transform: `translateY(${offsetY}px)` }">
+            <button
+              v-for="s in displayItems"
+              :key="s.code"
+              class="result-row"
+              :style="{ height: ROW_H + 'px' }"
+              @click="go(`/m/stock/${s.code}`)"
+              v-bind="stockLinkPrefetchHandlers(s.code)"
+            >
+              <div class="rr-left">
+                <div class="rr-name">{{ s.name }}</div>
+                <div class="rr-meta">
+                  <span class="rr-code mono">{{ s.code }}</span>
+                  <span v-if="s.industry" class="rr-industry">{{ s.industry }}</span>
+                </div>
+              </div>
+              <div class="rr-center">
+                <div class="rr-price mono">{{ s.price > 0 ? s.price.toFixed(2) : '—' }}</div>
+                <div class="rr-vol">{{ fmtVol(s.volume) }}</div>
+              </div>
+              <div class="rr-right">
+                <div
+                  class="rr-pct mono"
+                  :class="s.change_pct > 0 ? 'price-up' : s.change_pct < 0 ? 'price-down' : 'price-flat'"
+                >{{ s.change_pct > 0 ? '+' : '' }}{{ s.change_pct.toFixed(2) }}%</div>
+                <span v-if="s.latest_signal" class="rr-signal badge" :class="signalBadgeClass(s.latest_signal)">
+                  {{ s.latest_signal }}
+                </span>
+              </div>
+            </button>
+          </div>
+        </div>
+        <template v-else>
+          <button
+            v-for="s in displayItems"
+            :key="s.code"
+            class="result-row"
+            @click="go(`/m/stock/${s.code}`)"
+            v-bind="stockLinkPrefetchHandlers(s.code)"
+          >
+            <div class="rr-left">
+              <div class="rr-name">{{ s.name }}</div>
+              <div class="rr-meta">
+                <span class="rr-code mono">{{ s.code }}</span>
+                <span v-if="s.industry" class="rr-industry">{{ s.industry }}</span>
+              </div>
+            </div>
+            <div class="rr-center">
+              <div class="rr-price mono">{{ s.price > 0 ? s.price.toFixed(2) : '—' }}</div>
+              <div class="rr-vol">{{ fmtVol(s.volume) }}</div>
+            </div>
+            <div class="rr-right">
+              <div
+                class="rr-pct mono"
+                :class="s.change_pct > 0 ? 'price-up' : s.change_pct < 0 ? 'price-down' : 'price-flat'"
+              >{{ s.change_pct > 0 ? '+' : '' }}{{ s.change_pct.toFixed(2) }}%</div>
+              <span v-if="s.latest_signal" class="rr-signal badge" :class="signalBadgeClass(s.latest_signal)">
+                {{ s.latest_signal }}
+              </span>
+            </div>
+          </button>
+        </template>
+      </div>
     </template>
   </div>
 </template>
@@ -158,8 +207,13 @@
 <script setup lang="ts">
 import { ref, reactive, computed } from 'vue'
 import { useRouter } from 'vue-router'
+import type { StockScreenResult } from '@/api/stock'
+import { usePersistedMobileScreenFilters } from '@/composables/usePersistedScreenFilters'
 import { useScreenStream } from '@/composables/useScreenStream'
+import { useVirtualScroll } from '@/composables/useVirtualScroll'
 import { downloadScreenResultsCsv } from '@/utils/exportScreenCsv'
+import { sortRows, type SortDir } from '@/utils/sortRows'
+import { stockLinkPrefetchHandlers } from '@/utils/prefetchStock'
 
 const router = useRouter()
 const {
@@ -191,11 +245,49 @@ const filters = reactive({
   signals: '',
 })
 
+const { persistNow: persistScreenFilters } = usePersistedMobileScreenFilters(filters)
+
+type ScreenSortKey = 'change_pct' | 'name' | 'price'
+const sortKey = ref<ScreenSortKey>('change_pct')
+const sortDir = ref<SortDir>('desc')
+const sortOptions = [
+  { key: 'change_pct' as const, label: '涨跌幅' },
+  { key: 'name' as const, label: '名称' },
+  { key: 'price' as const, label: '现价' },
+]
+
+function cycleSort(key: ScreenSortKey) {
+  if (sortKey.value === key) {
+    sortDir.value = sortDir.value === 'desc' ? 'asc' : 'desc'
+  } else {
+    sortKey.value = key
+    sortDir.value = key === 'name' ? 'asc' : 'desc'
+  }
+}
+
+const sortedResults = computed(() =>
+  sortRows<StockScreenResult>(results.value, sortKey.value, sortDir.value),
+)
+
 const total = computed(() => results.value.length)
 const progressDone = computed(() => progress.value.done)
 const progressTotal = computed(() => progress.value.total)
-const PAGE_SIZE = 20
-const displayLimit = ref(PAGE_SIZE)
+const ROW_H = 68
+const enableVirtualScroll = computed(() => sortedResults.value.length > 30)
+const {
+  visibleItems,
+  containerProps,
+  wrapperProps,
+  offsetY,
+} = useVirtualScroll({
+  items: sortedResults,
+  itemHeight: ROW_H,
+  overscan: 4,
+  maxHeight: 480,
+})
+const displayItems = computed(() =>
+  enableVirtualScroll.value ? visibleItems.value : sortedResults.value,
+)
 const progressPct = computed(() => {
   if (!progressTotal.value) return 0
   return Math.round(progressDone.value / progressTotal.value * 100)
@@ -213,7 +305,7 @@ function resetFilters() {
 }
 
 async function doScreen() {
-  displayLimit.value = PAGE_SIZE
+  persistScreenFilters()
   await runScreenStream({
     change_pct_min: filters.change_pct_min,
     change_pct_max: filters.change_pct_max,
@@ -224,7 +316,7 @@ async function doScreen() {
     signals: filters.signals || undefined,
     level: 'daily',
     pool_size: 100,
-    max_results: 50,
+    max_results: 200,
   })
 }
 
@@ -233,7 +325,7 @@ function go(path: string) {
 }
 
 function exportResults() {
-  downloadScreenResultsCsv(results.value)
+  downloadScreenResultsCsv(sortedResults.value)
 }
 
 function fmtVol(v?: number) {
@@ -433,6 +525,26 @@ function signalBadgeClass(type: string) {
   align-items: center;
   justify-content: space-between;
 }
+.sort-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sort-chip {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.sort-chip.active {
+  border-color: rgba(56, 189, 248, 0.45);
+  color: var(--accent-cyan);
+  background: rgba(56, 189, 248, 0.1);
+}
 .results-count {
   font-size: 0.82rem;
   color: var(--text-muted);
@@ -447,6 +559,14 @@ function signalBadgeClass(type: string) {
   flex-direction: column;
   gap: 6px;
 }
+.vscroll-wrap {
+  overflow-y: auto;
+  max-height: 480px;
+  gap: 0;
+}
+.vscroll-spacer { position: relative; width: 100%; }
+.vscroll-inner { width: 100%; }
+.vscroll-wrap .result-row { margin-bottom: 6px; }
 
 .result-row {
   display: flex;
@@ -532,19 +652,4 @@ function signalBadgeClass(type: string) {
   font-size: 0.65rem;
   padding: 2px 6px;
 }
-
-.load-more-btn {
-  width: 100%;
-  padding: 12px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--bg-card);
-  color: var(--accent-blue);
-  font-size: 0.82rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s;
-  text-align: center;
-}
-.load-more-btn:active { background: var(--bg-hover); }
 </style>

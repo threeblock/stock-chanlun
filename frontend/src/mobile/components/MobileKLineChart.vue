@@ -4,6 +4,7 @@
     <div
       ref="chartRef"
       class="kline-chart"
+      :class="{ 'chart-ready': !loading }"
       @touchstart="onTouchStart"
       @touchmove="onTouchMove"
       @touchend="onTouchEnd"
@@ -637,7 +638,10 @@ watch(
 .kline-chart {
   width: 100%;
   height: 100%;
+  opacity: 0;
+  transition: opacity 0.22s ease;
 }
+.kline-chart.chart-ready { opacity: 1; }
 
 .bar-info {
   position: absolute;

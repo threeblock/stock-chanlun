@@ -32,7 +32,7 @@
             <!-- 实时搜索下拉 -->
             <div v-if="liveResults.length > 0 && showHistory" class="live-dropdown">
               <div
-                v-for="item in liveResults.slice(0, 6)"
+                v-for="item in liveResults"
                 :key="item.code"
                 class="live-item"
                 @mousedown.prevent="keyword = item.code; search()"
@@ -103,23 +103,52 @@
 
     <!-- 搜索结果 -->
     <div v-if="results.length > 0" class="container">
-      <div class="results">
-        <div
-          v-for="stock in results.slice(0, maxResults)"
-          :key="stock.code"
-          class="stock-card card"
-          @click="goToStock(stock.code)"
-        >
-          <div class="stock-info">
-            <span class="stock-code mono">{{ stock.code }}</span>
-            <span class="stock-name">{{ stock.name }}</span>
-          </div>
-          <div class="stock-arrow">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M9 18l6-6-6-6"/>
-            </svg>
+      <div
+        class="results"
+        :class="{ 'search-vscroll': enableSearchVirtual }"
+        v-bind="enableSearchVirtual ? searchContainerProps : {}"
+      >
+        <div v-if="enableSearchVirtual" class="search-vscroll-spacer" v-bind="searchWrapperProps">
+          <div class="search-vscroll-inner" :style="{ transform: `translateY(${searchOffsetY}px)` }">
+            <div
+              v-for="stock in searchDisplay"
+              :key="stock.code"
+              class="stock-card card"
+              :style="{ height: SEARCH_ROW_H + 'px' }"
+              @click="goToStock(stock.code)"
+              v-bind="stockLinkPrefetchHandlers(stock.code)"
+            >
+              <div class="stock-info">
+                <span class="stock-code mono">{{ stock.code }}</span>
+                <span class="stock-name">{{ stock.name }}</span>
+              </div>
+              <div class="stock-arrow">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M9 18l6-6-6-6"/>
+                </svg>
+              </div>
+            </div>
           </div>
         </div>
+        <template v-else>
+          <div
+            v-for="stock in searchDisplay"
+            :key="stock.code"
+            class="stock-card card"
+            @click="goToStock(stock.code)"
+            v-bind="stockLinkPrefetchHandlers(stock.code)"
+          >
+            <div class="stock-info">
+              <span class="stock-code mono">{{ stock.code }}</span>
+              <span class="stock-name">{{ stock.name }}</span>
+            </div>
+            <div class="stock-arrow">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 18l6-6-6-6"/>
+              </svg>
+            </div>
+          </div>
+        </template>
       </div>
     </div>
 
@@ -207,6 +236,7 @@
                   class="hot-board-cell"
                   :class="sectorPillClass(b.change_pct)"
                   @click="goSector(b.name)"
+                  v-bind="sectorLinkPrefetchHandlers(b.name)"
                 >
                   <span class="hb-name">{{ b.name }}</span>
                   <span class="hb-pct mono"
@@ -234,6 +264,7 @@
                     :class="sectorPillClass(s.change_pct)"
                     :title="`${s.name} ${s.change_pct >= 0 ? '+' : ''}${s.change_pct.toFixed(2)}%`"
                     @click="goSector(s.name)"
+                    v-bind="sectorLinkPrefetchHandlers(s.name)"
                   >
                     <span class="pill-name">{{ s.name }}</span>
                     <span class="pill-pct mono"
@@ -253,7 +284,7 @@
                   领涨
                 </div>
                 <ul class="sectors-list">
-                  <li v-for="(s, i) in sectorTopList" :key="'t-' + i" class="sector-item" @click="goSector(s.name)">
+                  <li v-for="(s, i) in sectorTopList" :key="'t-' + i" class="sector-item" @click="goSector(s.name)" v-bind="sectorLinkPrefetchHandlers(s.name)">
                     <span class="si-name">{{ s.name }}</span>
                     <span class="si-pct mono price-up">+{{ s.change_pct.toFixed(2) }}%</span>
                   </li>
@@ -267,7 +298,7 @@
                   领跌
                 </div>
                 <ul class="sectors-list">
-                  <li v-for="(s, i) in sectorBottomList" :key="'b-' + i" class="sector-item" @click="goSector(s.name)">
+                  <li v-for="(s, i) in sectorBottomList" :key="'b-' + i" class="sector-item" @click="goSector(s.name)" v-bind="sectorLinkPrefetchHandlers(s.name)">
                     <span class="si-name">{{ s.name }}</span>
                     <span class="si-pct mono"
                       :class="s.change_pct >= 0 ? 'price-up' : 'price-down'"
@@ -305,6 +336,7 @@
               :key="s.code"
               class="hot-card"
               @click="goToStock(s.code)"
+              v-bind="stockLinkPrefetchHandlers(s.code)"
             >
               <span class="hot-rank">{{ s.rank }}</span>
               <div class="hot-info">
@@ -378,10 +410,12 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { stockApi } from '../api/stock'
 import toast from '../composables/useToast'
 import { useHomeDashboard, formatNewsTime } from '../composables/useHomeDashboard'
+import { useDebouncedStockSearch } from '../composables/useDebouncedStockSearch'
 import { useVisibilityRefresh } from '../composables/useVisibilityRefresh'
+import { useVirtualScroll } from '../composables/useVirtualScroll'
+import { stockLinkPrefetchHandlers, sectorLinkPrefetchHandlers } from '../utils/prefetchStock'
 
 const AUTO_REFRESH_INTERVAL = 5 * 60 * 1000 // 5 minutes
 
@@ -405,6 +439,23 @@ const blurTimer = ref<ReturnType<typeof setTimeout> | null>(null)
 const searchInput = ref<{ focus: () => void } | null>(null)
 const MAX_RESULTS = 100
 const maxResults = computed(() => Math.min(results.value.length, MAX_RESULTS))
+const searchList = computed(() => results.value.slice(0, maxResults.value))
+const SEARCH_ROW_H = 56
+const enableSearchVirtual = computed(() => searchList.value.length > 40)
+const {
+  visibleItems: searchVisible,
+  containerProps: searchContainerProps,
+  wrapperProps: searchWrapperProps,
+  offsetY: searchOffsetY,
+} = useVirtualScroll({
+  items: searchList,
+  itemHeight: SEARCH_ROW_H,
+  overscan: 4,
+  maxHeight: 520,
+})
+const searchDisplay = computed(() =>
+  enableSearchVirtual.value ? searchVisible.value : searchList.value,
+)
 
 function onSearchFocus() {
   showHistory.value = true
@@ -428,44 +479,21 @@ function clearHistory() {
   localStorage.removeItem('search_history')
 }
 
-// ── 防抖搜索 ──────────────────────────────────────────────────────────────────
-const debounceTimer = ref<ReturnType<typeof setTimeout> | null>(null)
-const liveResults = ref<{ code: string; name: string }[]>([])
-const liveLoading = ref(false)
-const liveError = ref('')
+const {
+  results: liveResults,
+  loading: liveLoading,
+  errorCode: liveError,
+  runQuery: liveSearch,
+  searchImmediate,
+  clear: clearLiveSearch,
+} = useDebouncedStockSearch()
 
-function liveSearch(q: string) {
-  if (debounceTimer.value) clearTimeout(debounceTimer.value)
-  const q2 = q.trim()
-  if (!q2 || q2.length < 2) {
-    liveResults.value = []
-    liveError.value = ''
-    return
-  }
-  liveLoading.value = true
-  debounceTimer.value = setTimeout(async () => {
-    try {
-      const res = await stockApi.search(q2)
-      liveResults.value = res.data.stocks ?? []
-      liveError.value = liveResults.value.length === 0 ? 'no-results' : ''
-    } catch {
-      liveResults.value = []
-      liveError.value = 'error'
-    } finally {
-      liveLoading.value = false
-    }
-  }, 280)
-}
-
-// 监听 keyword 变化（防抖实时搜索）
 watch(keyword, (val) => {
   liveSearch(val)
-  // 清除结果和错误当用户清空输入
   if (!val.trim()) {
     results.value = []
     searchError.value = ''
-    liveResults.value = []
-    liveError.value = ''
+    clearLiveSearch()
   }
 })
 
@@ -474,16 +502,14 @@ async function search() {
   saveHistory(keyword.value.trim())
   searching.value = true
   searchError.value = ''
-  liveResults.value = []
   showHistory.value = false
   try {
-    const res = await stockApi.search(keyword.value)
-    results.value = res.data.stocks ?? []
+    results.value = await searchImmediate(keyword.value)
     if (results.value.length === 0) {
       toast.info('未找到相关股票，请尝试其他关键词')
     }
-  } catch (e: any) {
-    searchError.value = e.message
+  } catch (e: unknown) {
+    searchError.value = e instanceof Error ? e.message : '搜索失败'
     toast.error('搜索失败，请重试')
   } finally {
     searching.value = false
@@ -552,7 +578,7 @@ const { stop: stopAutoRefresh } = useVisibilityRefresh(
 )
 
 onMounted(async () => {
-  await refreshAll(true)
+  await refreshAll(false)
   window.addEventListener('keydown', handleGlobalKey)
 })
 
@@ -637,12 +663,14 @@ onUnmounted(() => {
   top: calc(100% + 4px);
   left: 0;
   right: 0;
+  max-height: 280px;
+  overflow-y: auto;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 8px;
   z-index: 200;
-  overflow: hidden;
   box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+  scrollbar-width: thin;
 }
 .live-item {
   display: flex;
@@ -1066,6 +1094,15 @@ onUnmounted(() => {
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
+}
+.results.search-vscroll {
+  max-height: 520px;
+}
+.search-vscroll-spacer { position: relative; width: 100%; }
+.search-vscroll-inner { width: 100%; }
+.results.search-vscroll .stock-card {
+  margin-bottom: 8px;
+  box-sizing: border-box;
 }
 .stock-card {
   display: flex;

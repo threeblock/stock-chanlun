@@ -86,6 +86,8 @@
       </div>
 
       <!-- Resonance -->
+      <MultiLevelTrendChips v-if="levelTrends?.length" :trends="levelTrends" />
+
       <div v-if="signal.resonance?.共振" class="resonance-block">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
@@ -103,11 +105,14 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { AISignal } from '../../api/stock'
+import type { LevelTrendChip } from '../../composables/useMultiLevelTrends'
+import MultiLevelTrendChips from './MultiLevelTrendChips.vue'
 
 const props = defineProps<{
   signal: AISignal | null
   updatedAt?: string | null
   loading?: boolean
+  levelTrends?: LevelTrendChip[]
 }>()
 
 defineEmits<{

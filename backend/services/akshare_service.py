@@ -666,7 +666,7 @@ def _fetch_em_industry_boards() -> list[dict]:
         js = _em_clist_request(
             {
                 "pn": 1,
-                "pz": 200,
+                "pz": 500,
                 "po": 1,
                 "np": 1,
                 "fltt": 2,
@@ -706,7 +706,7 @@ def _fetch_em_concept_boards() -> list[dict]:
         js = _em_clist_request(
             {
                 "pn": 1,
-                "pz": 200,
+                "pz": 500,
                 "po": 1,
                 "np": 1,
                 "fltt": 2,
@@ -978,7 +978,7 @@ def get_board_constituents_em(board_name: str) -> dict:
             "/api/qt/clist/get",
             {
                 "pn": 1,
-                "pz": 200,
+                "pz": 500,
                 "po": 1,
                 "np": 1,
                 "ut": "bd1d9ddb04089700cf9c27f6f7426281",

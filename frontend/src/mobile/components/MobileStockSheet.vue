@@ -70,6 +70,7 @@
 
             <!-- 缠论信号 Tab -->
             <div v-if="activeTab === 'signals'" class="tab-signals">
+              <MultiLevelTrendChips v-if="levelTrends.length" :trends="levelTrends" class="sheet-level-trends" />
               <!-- 走势判断 -->
               <div v-if="chanlunResult" class="trend-block">
                 <div class="trend-badge" :class="trendClass">
@@ -130,6 +131,8 @@ import { ref, computed, defineAsyncComponent } from 'vue'
 import type { Quote, StockInfoFields, Signal, AISignal } from '@/api/stock'
 import { useCommentStore } from '@/stores/comment'
 import { useVolumeFormatter } from '@/composables/useFormatters'
+import { useMultiLevelTrends } from '@/composables/useMultiLevelTrends'
+import MultiLevelTrendChips from '@/components/Signal/MultiLevelTrendChips.vue'
 
 const MobileCommentSection = defineAsyncComponent(
   () => import('./MobileCommentSection.vue'),
@@ -148,6 +151,8 @@ const props = defineProps<{
   } | null
   aiSignal: AISignal | null
 }>()
+
+const { levelTrends } = useMultiLevelTrends(() => props.stockCode)
 
 defineEmits<{
   'update:modelValue': [val: boolean]
@@ -355,6 +360,9 @@ const infoRows = computed(() => {
 .info-value { font-size: 0.82rem; font-weight: 600; }
 
 /* ── Signals ── */
+.sheet-level-trends {
+  margin-bottom: 12px;
+}
 .trend-block {
   margin-bottom: 16px;
 }

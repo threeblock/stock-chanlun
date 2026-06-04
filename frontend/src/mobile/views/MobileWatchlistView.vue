@@ -2,17 +2,29 @@
   <PullRefresh :refreshing="refreshing" @refresh="handleRefresh">
   <div class="watchlist-view">
     <div class="page-head">
-      <h2 class="page-title">我的自选</h2>
-      <span class="page-count">{{ store.stocks.length }} 支</span>
-      <button class="refresh-btn" @click="store.fetchWatchlist()" :class="{ spinning: store.loading }">
+      <div class="ph-row">
+        <h2 class="page-title">我的自选</h2>
+        <span class="page-count">{{ store.stocks.length }} 支</span>
+        <button class="refresh-btn" @click="store.fetchWatchlist()" :class="{ spinning: store.loading }">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
           <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
         </svg>
       </button>
+      </div>
+      <div v-if="store.stocks.length > 0" class="sort-bar">
+        <button
+          v-for="opt in sortOptions"
+          :key="opt.key"
+          type="button"
+          class="sort-chip"
+          :class="{ active: sortKey === opt.key }"
+          @click="cycleSort(opt.key)"
+        >{{ opt.label }}{{ sortKey === opt.key ? (sortDir === 'desc' ? ' ↓' : ' ↑') : '' }}</button>
+      </div>
     </div>
 
-    <div v-if="store.loading" class="page-loading">
+    <div v-if="store.loading && store.stocks.length === 0" class="page-loading">
       <div v-for="i in 5" :key="i" class="skeleton w-skel" />
     </div>
 
@@ -34,11 +46,13 @@
       <div class="vscroll-spacer" v-bind="wrapperProps">
         <div class="vscroll-inner" :style="{ transform: `translateY(${offsetY}px)` }">
           <button
-            v-for="s in visibleItems"
+            v-for="s in displayStocks"
             :key="s.code"
             class="stock-row"
             :style="{ height: ROW_H + 'px' }"
             @click="go(`/m/stock/${s.code}`)"
+            @click="go(`/m/stock/${s.code}`)"
+            v-bind="stockLinkPrefetchHandlers(s.code)"
           >
             <div class="sr-left">
               <div class="sr-name">{{ s.name || s.code }}</div>
@@ -73,10 +87,11 @@
 
     <div v-else class="stock-list">
       <button
-        v-for="s in store.stocks"
+        v-for="s in displayStocks"
         :key="s.code"
         class="stock-row"
-        @click="go(`/m/stock/${s.code}`)"
+            @click="go(`/m/stock/${s.code}`)"
+            v-bind="stockLinkPrefetchHandlers(s.code)"
       >
         <div class="sr-left">
           <div class="sr-name">{{ s.name || s.code }}</div>
@@ -111,13 +126,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, toRef } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWatchlistStore } from '@/stores/watchlist'
 import toast from '@/composables/useToast'
 import PullRefresh from '@/mobile/components/PullRefresh.vue'
+import type { Quote } from '@/api/stock'
 import { useVirtualScroll } from '@/composables/useVirtualScroll'
 import { useVisibilityRefresh } from '@/composables/useVisibilityRefresh'
+import { stockLinkPrefetchHandlers } from '@/utils/prefetchStock'
+import { sortRows, type SortDir } from '@/utils/sortRows'
 
 const AUTO_REFRESH_INTERVAL = 2 * 60 * 1000
 
@@ -125,19 +143,44 @@ const router = useRouter()
 const store = useWatchlistStore()
 const refreshing = ref(false)
 
+type WlSortKey = 'change_pct' | 'name' | 'added_at'
+const sortKey = ref<WlSortKey>('change_pct')
+const sortDir = ref<SortDir>('desc')
+const sortOptions = [
+  { key: 'change_pct' as const, label: '涨跌幅' },
+  { key: 'name' as const, label: '名称' },
+  { key: 'added_at' as const, label: '添加' },
+]
+
+function cycleSort(key: WlSortKey) {
+  if (sortKey.value === key) {
+    sortDir.value = sortDir.value === 'desc' ? 'asc' : 'desc'
+  } else {
+    sortKey.value = key
+    sortDir.value = key === 'name' ? 'asc' : 'desc'
+  }
+}
+
+const sortedStocks = computed(() =>
+  sortRows<Quote>([...store.stocks], sortKey.value, sortDir.value),
+)
+
 const ROW_H = 72
-const enableVirtualScroll = computed(() => store.stocks.length > 30)
+const enableVirtualScroll = computed(() => sortedStocks.value.length > 30)
 const {
   visibleItems,
   containerProps,
   wrapperProps,
   offsetY,
 } = useVirtualScroll({
-  items: toRef(store, 'stocks'),
+  items: sortedStocks,
   itemHeight: ROW_H,
   overscan: 4,
   maxHeight: 560,
 })
+const displayStocks = computed(() =>
+  enableVirtualScroll.value ? visibleItems.value : sortedStocks.value,
+)
 
 function fmtVol(v?: number) {
   if (!v) return '—'
@@ -187,7 +230,7 @@ onMounted(() => {
 })
 
 useVisibilityRefresh(async () => {
-  await store.fetchWatchlist(true)
+  await store.fetchWatchlist(false)
 }, AUTO_REFRESH_INTERVAL)
 </script>
 
@@ -201,8 +244,31 @@ useVisibilityRefresh(async () => {
 
 .page-head {
   display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ph-row {
+  display: flex;
   align-items: center;
   gap: 8px;
+}
+.sort-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sort-chip {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.sort-chip.active {
+  border-color: rgba(56, 189, 248, 0.45);
+  color: var(--accent-cyan);
 }
 .page-title {
   font-size: 1rem;

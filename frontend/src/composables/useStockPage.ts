@@ -5,7 +5,8 @@ import { ref } from 'vue'
 import { stockApi, type Quote, type StockInfoFields, type StockExtras } from '../api/stock'
 import { useChanlunStore, type LevelOption } from '../stores/chanlun'
 import { useCommentStore } from '../stores/comment'
-import { invalidateApiCache, peekApiCache } from '../utils/apiCache'
+import { peekApiCache } from '../utils/apiCache'
+import { prefetchMultiLevelChanlun } from '../utils/prefetchStock'
 
 export function useStockPage() {
   const store = useChanlunStore()
@@ -44,6 +45,7 @@ export function useStockPage() {
   ) {
     if (!code) return
     const force = options?.force ?? false
+    void prefetchMultiLevelChanlun(code)
     const tasks: Promise<unknown>[] = [
       store.loadAll(code, level, startDate, endDate, { force }),
       loadQuoteExtras(code, force),
@@ -55,10 +57,7 @@ export function useStockPage() {
   }
 
   async function changeLevel(code: string, level: LevelOption) {
-    invalidateApiCache(`GET:/chanlun/${code}`)
-    invalidateApiCache(`GET:/stocks/${code}/kline`)
-    invalidateApiCache(`GET:/chanlun/${code}/ai`)
-    await store.loadAll(code, level, undefined, undefined, { force: true })
+    await store.loadAll(code, level, undefined, undefined, { force: false })
   }
 
   async function refreshAIStrategy(code: string, options?: { useLlm?: boolean }) {

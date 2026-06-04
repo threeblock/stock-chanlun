@@ -120,6 +120,19 @@ export const useChanlunStore = defineStore('chanlun', () => {
     return `GET:/chanlun/${code}?level=${level}`
   }
 
+  function klineCacheKey(
+    code: string,
+    level: LevelOption,
+    limit: number,
+    startDate?: string,
+    endDate?: string,
+  ) {
+    const params = new URLSearchParams({ level, limit: String(limit) })
+    if (startDate) params.set('start_date', startDate)
+    if (endDate) params.set('end_date', endDate)
+    return `GET:/stocks/${code}/kline?${params.toString()}`
+  }
+
   function aiSignalCacheKey(code: string, level: LevelOption, useLlm: boolean) {
     const params = new URLSearchParams({ level, model: aiModel.value })
     if (useLlm) params.set('use_llm', 'true')
@@ -144,11 +157,25 @@ export const useChanlunStore = defineStore('chanlun', () => {
     seq?: number,
     force = false,
   ) {
+    const key = klineCacheKey(code, level, 500, startDate, endDate)
+    let hadCached = false
+
+    if (!force) {
+      const peek = peekApiCache<{ data: { klines: KLine[] } }>(key)
+      if (peek) {
+        hadCached = true
+        if (seq != null && isStale(seq)) return
+        klines.value = peek.data.data.klines || []
+        klineUpdatedAt.value = timeNow()
+        errorKline.value = null
+        if (!peek.isStale) return
+      }
+    }
+
     klineAbort?.abort()
     klineAbort = new AbortController()
     const signal = klineAbort.signal
-    const showLoading = klines.value.length === 0
-    loadingKline.value = showLoading
+    loadingKline.value = !hadCached && klines.value.length === 0
     errorKline.value = null
     try {
       const res = await stockApi.kline(code, level, 500, startDate, endDate, { signal, force })
@@ -264,7 +291,9 @@ export const useChanlunStore = defineStore('chanlun', () => {
     currentLevel.value = level
     const hasDateFilter = Boolean(startDate || endDate)
 
-    // 优先 /chanlun（含 K 线 + 结构），仅失败或无 klines 时回退 /kline
+    // 缠论与 AI 策略并行拉取（不同接口，可重叠等待）
+    const aiTask = fetchAISignal(code, level, { useLlm: false, seq, force })
+
     await fetchChanlun(code, level, seq, force)
 
     if (!isStale(seq) && hasDateFilter && klines.value.length) {
@@ -276,7 +305,7 @@ export const useChanlunStore = defineStore('chanlun', () => {
     }
 
     if (!isStale(seq)) {
-      void fetchAISignal(code, level, { useLlm: false, seq, force: force })
+      await aiTask
     }
   }
 

@@ -45,6 +45,8 @@ export const API_CACHE_TTL = {
   search: 30_000,
   comments: 60_000,
   sector: 120_000,
+  settings: 300_000,
+  chanlunMulti: 90_000,
   /** 规则引擎 AI 策略（与后端 ai_signal_rule_cache 90s 对齐） */
   aiSignalRule: 90_000,
   /** LLM 增强 AI 策略（与后端 ai_signal_llm_cache 300s 对齐） */

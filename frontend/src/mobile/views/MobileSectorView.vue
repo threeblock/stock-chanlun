@@ -22,7 +22,7 @@
     <!-- 错误 -->
     <div v-else-if="error" class="error-wrap">
       <p>{{ error }}</p>
-      <button class="btn btn-ghost" @click="fetchData">重试</button>
+      <button class="btn btn-ghost" @click="fetchData(true)">重试</button>
     </div>
 
     <!-- 空 -->
@@ -40,6 +40,7 @@
             class="stock-row"
             :style="{ height: ROW_H + 'px' }"
             @click="go(`/m/stock/${s.code}`)"
+            v-bind="stockLinkPrefetchHandlers(s.code)"
           >
             <div class="sr-rank">
               <span class="rank-num" :class="rankClass(s.rank)">#{{ s.rank }}</span>
@@ -77,6 +78,7 @@
         :key="s.code"
         class="stock-row"
         @click="go(`/m/stock/${s.code}`)"
+        v-bind="stockLinkPrefetchHandlers(s.code)"
       >
         <div class="sr-rank">
           <span class="rank-num" :class="rankClass(s.rank)">#{{ s.rank }}</span>
@@ -118,6 +120,7 @@ import toast from '@/composables/useToast'
 import PullRefresh from '@/mobile/components/PullRefresh.vue'
 import { useVirtualScroll } from '@/composables/useVirtualScroll'
 import { useSectorData } from '@/composables/useSectorData'
+import { stockLinkPrefetchHandlers } from '@/utils/prefetchStock'
 
 const route = useRoute()
 const router = useRouter()

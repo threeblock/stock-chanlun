@@ -27,6 +27,7 @@
       v-show="!loading"
       ref="chartRef"
       class="kline-chart"
+      :class="{ 'chart-ready': !loading }"
       :style="{ height: `${chartHeightPx}px` }"
     />
     <div v-if="barInfoText" class="bar-info">{{ barInfoText }}</div>
@@ -717,7 +718,13 @@ watch(chartHeightPx, () => {
   overflow: hidden;
   background: var(--bg-card);
 }
-.kline-chart { width: 100%; min-height: 420px; }
+.kline-chart {
+  width: 100%;
+  min-height: 420px;
+  opacity: 0;
+  transition: opacity 0.22s ease;
+}
+.kline-chart.chart-ready { opacity: 1; }
 .bar-info {
   padding: 8px 12px 10px;
   font-size: 12px;
