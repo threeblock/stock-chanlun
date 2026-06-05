@@ -246,11 +246,7 @@ stock-chanlun/
 │   │   │   └── SectorView.vue       # 板块详情
 │   │   ├── components/
 │   │   │   ├── Chart/
-│   │   │   │   ├── KLineChart.vue     # 主图（K线 + 缠论叠加）
-│   │   │   │   ├── VolumeChart.vue   # 成交量副图
-│   │   │   │   ├── MACDChart.vue      # MACD（DIF/DEA + 柱状图）
-│   │   │   │   ├── RSIChart.vue       # RSI 副图
-│   │   │   │   └── SKDJChart.vue      # SKDJ 副图
+│   │   │   │   └── KLineChart.vue       # PC 主图 + 副图（单 ECharts 多 grid，缠论叠加）
 │   │   │   ├── Signal/
 │   │   │   │   ├── SignalCard.vue     # 买卖点卡片
 │   │   │   │   ├── StrategyCard.vue   # AI 策略卡片
@@ -342,7 +338,11 @@ stock-chanlun/
 
 ### K 线可视化
 
-主图叠加：MA5/20/60、笔（红涨绿跌）、线段（黄/橙）、中枢（紫色矩形）、买卖点标记、AI 入场/止损/止盈线、支撑阻力水平线。副图：成交量、MACD、RSI、SKDJ。主图/副图支持降采样以提升渲染性能。
+主图叠加：MA5/20/60、笔（红涨绿跌）、线段（黄/橙）、中枢（紫色矩形）、买卖点标记、AI 入场/止损/止盈线、支撑阻力水平线。副图：成交量、MACD、RSI、SKDJ。
+
+**渲染降采样**（`frontend/src/utils/chartDownsample.ts`）：
+- 主图：K 线超过 **600** 根时用 **LTTB** 算法降采样，并在相邻锚点间保留区间高低价，避免影线失真；缠论笔/中枢/信号仍按全量数据映射到显示轴。
+- **PC 端**：`KLineChart.vue` 将主图与已开启副图（成交量/MACD/RSI/SKDJ）合并为 **单个 ECharts 实例**（多 grid），共享 `inside` + `slider` dataZoom，减少实例数与重绘开销。
 
 ### AI 策略与诊股
 
@@ -559,9 +559,11 @@ GET  /api/chanlun/{code}/ai?level=&model=&use_llm=   AI 策略（默认仅规则
 ### AI 诊股对话（流式 SSE）
 
 ```
-GET   /api/ai/diagnosis?code=&question=&session_id=&model=   AI 诊股对话（流式返回）
-POST  /api/ai/diagnosis                                              同上（POST 版本）
+POST  /api/ai/diagnosis   JSON body: { code, question, session_id?, model? }  （推荐，长问题不进 URL）
+GET   /api/ai/diagnosis?code=&question=&session_id=&model=   兼容旧版（短问题可用）
 ```
+
+`level` 为 `1min` 时，后端实际拉取 **5 分钟** K 线（`data_period: "5min"` 会在缠论响应中注明）。
 
 返回格式（SSE）：
 - `{"token": "..."}` - 流式 token

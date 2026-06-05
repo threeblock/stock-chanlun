@@ -27,7 +27,7 @@
         </div>
         <div v-if="msg.error" class="msg-error">{{ msg.error }}</div>
       </div>
-      <div v-if="isLoading" class="message assistant">
+      <div v-if="isLoading && !hasStreamingReply" class="message assistant">
         <div class="msg-bubble typing">
           <span></span><span></span><span></span>
         </div>
@@ -46,8 +46,21 @@
         @input="autoResize"
       />
       <button
+        v-if="isLoading"
+        type="button"
+        class="send-btn stop-btn"
+        title="停止生成"
+        @click="stopGeneration"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="6" y="6" width="12" height="12" rx="1"/>
+        </svg>
+      </button>
+      <button
+        v-else
+        type="button"
         class="send-btn"
-        :disabled="!inputText.trim() || isLoading"
+        :disabled="!inputText.trim()"
         @click="sendMessage"
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -59,98 +72,27 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick } from 'vue'
-import { stockApi } from '@/api/stock'
+import { computed } from 'vue'
+import { useAiDiagnosisChat } from '@/composables/useAiDiagnosisChat'
 
 const props = defineProps<{ stockCode: string }>()
 
-interface Message {
-  role: 'user' | 'assistant'
-  content: string
-  displayText: string
-  streaming: boolean
-  error?: string
-}
+const {
+  messages,
+  inputText,
+  isLoading,
+  msgListRef,
+  inputRef,
+  suggestions,
+  sendMessage,
+  stopGeneration,
+  fillQuestion,
+  autoResize,
+} = useAiDiagnosisChat(props.stockCode, 'm_session', { showErrorToast: false })
 
-const messages = ref<Message[]>([])
-const inputText = ref('')
-const isLoading = ref(false)
-const msgListRef = ref<HTMLElement>()
-const inputRef = ref<HTMLTextAreaElement>()
-const sessionId = ref(`m_session_${props.stockCode}_${Date.now()}`)
-
-const suggestions = [
-  '分析当前走势',
-  '现在是买点吗？',
-  '压力位在哪？',
-  '止损位建议',
-]
-
-function fillQuestion(q: string) {
-  inputText.value = q
-  inputRef.value?.focus()
-}
-
-async function sendMessage() {
-  const text = inputText.value.trim()
-  if (!text || isLoading.value) return
-
-  messages.value.push({
-    role: 'user', content: text, displayText: text, streaming: false,
-  })
-  inputText.value = ''
-  await nextTick()
-  if (inputRef.value) {
-    inputRef.value.style.height = ''
-  }
-  scrollToBottom()
-
-  const aiMsgIdx = messages.value.length
-  messages.value.push({
-    role: 'assistant', content: '', displayText: '', streaming: true,
-  })
-  isLoading.value = true
-
-  try {
-    let fullText = ''
-    const stream = stockApi.aiDiagnosisStream(props.stockCode, text, sessionId.value, 'deepseek')
-    for await (const token of stream) {
-      fullText += token
-      messages.value[aiMsgIdx] = {
-        role: 'assistant', content: fullText, displayText: fullText, streaming: true,
-      }
-      await nextTick()
-      scrollToBottom()
-    }
-    messages.value[aiMsgIdx] = {
-      role: 'assistant', content: fullText, displayText: fullText, streaming: false,
-    }
-  } catch {
-    messages.value[aiMsgIdx] = {
-      role: 'assistant', content: '', displayText: '', streaming: false,
-      error: '诊断失败，请重试',
-    }
-  } finally {
-    isLoading.value = false
-    await nextTick()
-    scrollToBottom()
-  }
-}
-
-function scrollToBottom() {
-  if (msgListRef.value) {
-    msgListRef.value.scrollTop = msgListRef.value.scrollHeight
-  }
-}
-
-const INPUT_MIN_HEIGHT_PX = 52
-
-function autoResize(e: Event) {
-  const el = e.target as HTMLTextAreaElement
-  el.style.height = 'auto'
-  el.style.height =
-    Math.min(Math.max(el.scrollHeight, INPUT_MIN_HEIGHT_PX), 120) + 'px'
-}
+const hasStreamingReply = computed(() =>
+  messages.value.some(m => m.role === 'assistant' && m.streaming && m.displayText.length > 0),
+)
 </script>
 
 <style scoped>
@@ -306,5 +248,8 @@ function autoResize(e: Event) {
 }
 .send-btn:not(:disabled):active {
   filter: brightness(1.1);
+}
+.send-btn.stop-btn {
+  background: linear-gradient(135deg, #ef4444, #dc2626);
 }
 </style>

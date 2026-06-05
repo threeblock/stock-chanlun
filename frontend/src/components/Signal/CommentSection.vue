@@ -119,7 +119,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, onMounted } from 'vue'
 import { useCommentStore } from '../../stores/comment'
 import type { Comment } from '../../api/stock'
 import toast from '../../composables/useToast'
@@ -127,6 +127,10 @@ import toast from '../../composables/useToast'
 const props = defineProps<{ stockCode: string }>()
 
 const store = useCommentStore()
+
+onMounted(() => {
+  void store.fetchComments(props.stockCode)
+})
 
 const comments = computed(() => store.getComments(props.stockCode))
 const storeError = computed(() => store.getError(props.stockCode))

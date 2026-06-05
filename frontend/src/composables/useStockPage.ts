@@ -5,6 +5,8 @@ import { ref } from 'vue'
 import { stockApi, type Quote, type StockInfoFields, type StockExtras } from '../api/stock'
 import { useChanlunStore, type LevelOption } from '../stores/chanlun'
 import { useCommentStore } from '../stores/comment'
+import { peekApiCache } from '../utils/apiCache'
+import { prefetchMultiLevelChanlun } from '../utils/prefetchStock'
 
 export function useStockPage() {
   const store = useChanlunStore()
@@ -14,11 +16,11 @@ export function useStockPage() {
   const stockInfo = ref<StockInfoFields | null>(null)
   const extras = ref<StockExtras | null>(null)
 
-  async function loadQuoteExtras(code: string) {
+  async function loadQuoteExtras(code: string, force = false) {
     const settled = await Promise.allSettled([
-      stockApi.quote(code),
-      stockApi.info(code),
-      stockApi.extras(code, 8),
+      stockApi.quote(code, { force }),
+      stockApi.info(code, { force }),
+      stockApi.extras(code, 8, { force }),
     ])
     if (settled[0].status === 'fulfilled') quote.value = settled[0].value.data as Quote
     else quote.value = null
@@ -30,26 +32,51 @@ export function useStockPage() {
     else extras.value = null
   }
 
+  async function loadComments(code: string, force = false) {
+    await commentStore.fetchComments(code, force)
+  }
+
   async function loadStock(
     code: string,
     level: LevelOption,
     startDate?: string,
     endDate?: string,
+    options?: { force?: boolean; loadComments?: boolean },
   ) {
     if (!code) return
-    await store.loadAll(code, level, startDate, endDate)
-    await Promise.all([
-      loadQuoteExtras(code),
-      commentStore.fetchComments(code),
-    ])
+    const force = options?.force ?? false
+    void prefetchMultiLevelChanlun(code)
+    const tasks: Promise<unknown>[] = [
+      store.loadAll(code, level, startDate, endDate, { force }),
+      loadQuoteExtras(code, force),
+    ]
+    if (options?.loadComments) {
+      tasks.push(loadComments(code, force))
+    }
+    await Promise.all(tasks)
   }
 
   async function changeLevel(code: string, level: LevelOption) {
-    await store.loadAll(code, level)
+    await store.loadAll(code, level, undefined, undefined, { force: false })
   }
 
   async function refreshAIStrategy(code: string, options?: { useLlm?: boolean }) {
-    await store.fetchAISignal(code, store.currentLevel, options)
+    await store.fetchAISignal(code, store.currentLevel, { ...options, force: true })
+  }
+
+  async function refreshQuotes(code: string) {
+    if (!code) return
+    const quoteKeys = [
+      `GET:/stocks/${code}/quote`,
+      `GET:/stocks/${code}/info`,
+      `GET:/stocks/${code}/extras:8`,
+    ]
+    const needsFetch = quoteKeys.some(k => {
+      const peek = peekApiCache(k)
+      return !peek || peek.isStale
+    })
+    if (!needsFetch) return
+    await loadQuoteExtras(code, true)
   }
 
   return {
@@ -60,6 +87,8 @@ export function useStockPage() {
     loadStock,
     changeLevel,
     loadQuoteExtras,
+    refreshQuotes,
+    loadComments,
     refreshAIStrategy,
   }
 }

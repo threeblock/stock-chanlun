@@ -16,7 +16,8 @@ from fastapi.responses import StreamingResponse
 from core.chanlun_analysis import level_to_period
 from core.kline_serialize import df_to_kline_dicts
 from core.numbers import finite_float
-from deps import check_kline_rate_limits, client_ip
+from deps import check_kline_rate_limits, check_light_api_rate_limits, check_screening_rate_limits, client_ip
+from utils import market_overview_cache, sector_board_cache, stock_news_cache
 from services.akshare_service import (
     get_board_constituents_em,
     get_daily_hot_stocks,
@@ -46,12 +47,14 @@ def _search_stock_impl(q: str):
 
 
 @router.get("/api/stocks/search", tags=["数据"])
-async def search_stock(q: str = Query(..., min_length=1)):
+async def search_stock(request: Request, q: str = Query(..., min_length=1)):
+    check_light_api_rate_limits(client_ip(request))
     return await asyncio.to_thread(_search_stock_impl, q)
 
 
 @router.get("/api/stocks/hot", tags=["数据"])
-async def hot_stocks(limit: int = Query(15, ge=1, le=50)):
+async def hot_stocks(request: Request, limit: int = Query(15, ge=1, le=50)):
+    check_light_api_rate_limits(client_ip(request))
     def _run():
         stocks = get_daily_hot_stocks(limit)
         return {
@@ -65,6 +68,7 @@ async def hot_stocks(limit: int = Query(15, ge=1, le=50)):
 
 @router.get("/api/stocks/screen", tags=["选股"])
 async def screen_stocks_api(
+    request: Request,
     change_pct_min: Optional[float] = Query(None, description="最小涨跌幅（%）"),
     change_pct_max: Optional[float] = Query(None, description="最大涨跌幅（%）"),
     volume_min: Optional[float] = Query(None, description="最小成交量（手）"),
@@ -80,6 +84,7 @@ async def screen_stocks_api(
     ),
     pool_size: int = Query(100, ge=10, le=1000, description="候选池大小（最高 1000）"),
 ):
+    check_screening_rate_limits(client_ip(request))
     from services.screening_service import screen_stocks
 
     signal_types: list[str] | None = None
@@ -126,6 +131,7 @@ def screen_stocks_stream_api(
     pool_size: int = Query(100, ge=10, le=1000, description="候选池大小（最高 1000）"),
     max_results: int = Query(50, ge=1, le=200, description="最多返回条数"),
 ):
+    check_screening_rate_limits(client_ip(request))
     from services.screening_service import screen_stocks_stream
 
     signal_types: list[str] | None = None
@@ -178,10 +184,16 @@ def screen_stocks_stream_api(
 
 
 @router.get("/api/market/overview", tags=["数据"])
-async def market_overview():
+async def market_overview(request: Request):
+    check_kline_rate_limits(client_ip(request))
     def _run():
+        cached = market_overview_cache.get("overview")
+        if cached is not None:
+            return cached
         try:
-            return get_market_overview_bundle()
+            payload = get_market_overview_bundle()
+            market_overview_cache.set("overview", payload)
+            return payload
         except Exception as e:
             log.warning("大盘概览获取失败: %s", e)
             return {
@@ -190,21 +202,41 @@ async def market_overview():
                 "sectors": [],
                 "sectors_top": [],
                 "sectors_bottom": [],
+                "stale": True,
+                "error": str(e),
             }
 
     return await asyncio.to_thread(_run)
 
 
 @router.get("/api/news", tags=["数据"])
-async def news(limit: int = Query(10, ge=1, le=30)):
-    return await asyncio.to_thread(lambda: {"items": get_stock_news(limit)})
+async def news(request: Request, limit: int = Query(10, ge=1, le=30)):
+    check_light_api_rate_limits(client_ip(request))
+
+    def _run():
+        key = f"limit={limit}"
+        cached = stock_news_cache.get(key)
+        if cached is not None:
+            return cached
+        payload = {"items": get_stock_news(limit)}
+        stock_news_cache.set(key, payload)
+        return payload
+
+    return await asyncio.to_thread(_run)
 
 
 @router.get("/api/sector/{name}/stocks", tags=["数据"])
-async def sector_stocks(name: str):
+async def sector_stocks(request: Request, name: str):
+    check_light_api_rate_limits(client_ip(request))
     def _run():
+        key = name.strip()
+        cached = sector_board_cache.get(key)
+        if cached is not None:
+            return cached
         try:
-            return get_board_constituents_em(name)
+            payload = get_board_constituents_em(name)
+            sector_board_cache.set(key, payload)
+            return payload
         except Exception as e:
             log.warning("板块「%s」获取失败: %s", name, e)
             return {"sector_name": name, "board_type": None, "stocks": [], "total": 0}
@@ -213,7 +245,8 @@ async def sector_stocks(name: str):
 
 
 @router.get("/api/stocks/{code}/info", tags=["数据"])
-async def stock_info(code: str):
+async def stock_info(request: Request, code: str):
+    check_light_api_rate_limits(client_ip(request))
     def _run():
         sym, exchange = normalize_stock_code(code)
         info = get_stock_info(sym)
@@ -224,17 +257,28 @@ async def stock_info(code: str):
 
 @router.get("/api/stocks/{code}/extras", tags=["数据"])
 async def stock_extras(
+    request: Request,
     code: str,
     news_limit: int = Query(8, ge=1, le=20),
 ):
+    check_light_api_rate_limits(client_ip(request))
     def _run():
+        from concurrent.futures import ThreadPoolExecutor
+
         sym, exchange = normalize_stock_code(code)
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            f_depth = pool.submit(get_stock_depth_em, sym)
+            f_boards = pool.submit(get_stock_boards_em, sym)
+            f_news = pool.submit(get_stock_symbol_news_em, sym, news_limit)
+            depth = f_depth.result()
+            boards = f_boards.result()
+            news = f_news.result()
         return {
             "code": sym,
             "exchange": exchange,
-            "depth": get_stock_depth_em(sym),
-            "boards": get_stock_boards_em(sym),
-            "news": get_stock_symbol_news_em(sym, news_limit),
+            "depth": depth,
+            "boards": boards,
+            "news": news,
         }
 
     return await asyncio.to_thread(_run)
@@ -289,7 +333,7 @@ def _stock_kline_impl(
     end_date: Optional[str],
 ):
     period = level_to_period(level)
-    df = get_kline_hist(code, period=period, adjust="qfq")
+    df = get_kline_hist(code, period=period, adjust="qfq", limit=limit)
     if df.empty:
         return {"klines": [], "total": 0}
 
@@ -324,11 +368,9 @@ async def stock_kline(
 
 def _export_stock_csv_impl(code: str, level: str, limit: int):
     period = level_to_period(level)
-    df = get_kline_hist(code, period=period, adjust="qfq")
+    df = get_kline_hist(code, period=period, adjust="qfq", limit=limit)
     if df.empty:
         raise HTTPException(status_code=404, detail="K线数据为空，无法导出")
-
-    df = df.tail(limit).reset_index(drop=True)
 
     output = io.StringIO()
     writer = csv.writer(output)

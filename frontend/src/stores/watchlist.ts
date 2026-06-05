@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import { stockApi, type Quote } from '../api/stock'
+import { invalidateApiCache, peekApiCache, API_CACHE_TTL } from '../utils/apiCache'
 
 const STORAGE_KEY = 'chanstock_watchlist_v2'
 
@@ -27,8 +28,6 @@ export const useWatchlistStore = defineStore('watchlist', () => {
   const lastUpdated = ref<Date | null>(
     stocks.value.length > 0 ? new Date() : null
   )
-  const synced = ref(false) // 是否已与后端同步
-
   const sortedByChange = computed(() =>
     [...stocks.value].sort((a, b) => b.change_pct - a.change_pct)
   )
@@ -37,17 +36,50 @@ export const useWatchlistStore = defineStore('watchlist', () => {
     stocks.value.some(s => s.change_pct > 0)
   )
 
-  // 任何变化都写入本地存储
-  watch(stocks, (val) => saveToStorage(val), { deep: true })
+  let saveTimer: ReturnType<typeof setTimeout> | null = null
 
-  async function fetchWatchlist() {
-    loading.value = true
+  watch(
+    () => stocks.value.map(s => `${s.code}:${s.price}:${s.change_pct}`).join('|'),
+    () => {
+      if (saveTimer) clearTimeout(saveTimer)
+      saveTimer = setTimeout(() => saveToStorage(stocks.value), 300)
+    },
+  )
+
+  async function fetchWatchlist(force = false) {
+    const cacheKey = 'GET:/watchlist'
+
+    if (!force) {
+      const peek = peekApiCache<{ data: { stocks?: Quote[] } }>(cacheKey)
+      if (peek) {
+        stocks.value = peek.data.data.stocks ?? stocks.value
+        lastUpdated.value = new Date()
+        error.value = null
+        if (!peek.isStale) return
+        try {
+          const res = await stockApi.watchlist({ force: true })
+          stocks.value = res.data.stocks || []
+          lastUpdated.value = new Date()
+        } catch {
+          /* 保留 stale */
+        }
+        return
+      }
+      if (
+        lastUpdated.value &&
+        Date.now() - lastUpdated.value.getTime() < API_CACHE_TTL.watchlist * 0.7
+      ) {
+        return
+      }
+    }
+
+    const showSkeleton = stocks.value.length === 0
+    if (showSkeleton) loading.value = true
     error.value = null
     try {
-      const res = await stockApi.watchlist()
+      const res = await stockApi.watchlist({ force })
       stocks.value = res.data.stocks || []
       lastUpdated.value = new Date()
-      synced.value = true
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : String(e)
     } finally {
@@ -63,20 +95,17 @@ export const useWatchlistStore = defineStore('watchlist', () => {
     }
     try {
       await stockApi.addWatch(code)
-      // 乐观更新：直接追加，后端数据等下次 fetch 时刷新
-      stocks.value.push({
-        code,
-        name: '',
-        price: 0,
-        change_pct: 0,
-        volume: 0,
-        high: 0,
-        low: 0,
-        open: 0,
-        prev_close: 0,
-        amount: 0,
-      })
-      await fetchWatchlist()
+      invalidateApiCache('GET:/watchlist')
+      try {
+        const q = await stockApi.quote(code, { force: true })
+        const row = q.data
+        if (!stocks.value.some(s => s.code === row.code)) {
+          stocks.value.push(row)
+        }
+      } catch {
+        await fetchWatchlist()
+      }
+      lastUpdated.value = new Date()
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : String(e)
       throw e
@@ -88,6 +117,7 @@ export const useWatchlistStore = defineStore('watchlist', () => {
     stocks.value = stocks.value.filter(s => s.code !== code)
     try {
       await stockApi.removeWatch(code)
+      invalidateApiCache('GET:/watchlist')
     } catch (e: unknown) {
       stocks.value = snapshot
       error.value = e instanceof Error ? e.message : String(e)

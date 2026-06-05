@@ -2,10 +2,23 @@
 统一 LLM 客户端 — 支持 DeepSeek 和 Gemini，自动降级
 """
 import os
+import threading
+
 import httpx
 from typing import Optional
 
 from config import DEEPSEEK_MODEL_ID
+
+_llm_http_client: httpx.Client | None = None
+_llm_http_lock = threading.RLock()
+
+
+def _get_llm_http_client() -> httpx.Client:
+    global _llm_http_client
+    with _llm_http_lock:
+        if _llm_http_client is None:
+            _llm_http_client = httpx.Client(timeout=60.0)
+        return _llm_http_client
 
 
 class LLMClient:
@@ -32,15 +45,15 @@ class LLMClient:
             "temperature": kwargs.get("temperature", 0.3),
             "max_tokens": kwargs.get("max_tokens", 1024),
         }
-        with httpx.Client(timeout=60.0) as client:
-            resp = client.post(
-                "https://api.deepseek.com/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {key}",
-                    "Content-Type": "application/json",
-                },
-                json=body,
-            )
+        client = _get_llm_http_client()
+        resp = client.post(
+            "https://api.deepseek.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+        )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"].strip()
 
@@ -78,8 +91,8 @@ class LLMClient:
         model_id = model_map.get(self.model, "gemini-2.0-flash")
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={key}"
-        with httpx.Client(timeout=60.0) as client:
-            resp = client.post(url, json=body)
+        client = _get_llm_http_client()
+        resp = client.post(url, json=body)
         resp.raise_for_status()
         data = resp.json()
         return data["candidates"][0]["content"]["parts"][0]["text"].strip()
@@ -115,20 +128,23 @@ class LLMClient:
 
 _current_model: Optional[str] = None
 _llm_client: Optional[LLMClient] = None
+_llm_client_lock = threading.RLock()
 
 
 def get_llm_client(model: Optional[str] = None) -> LLMClient:
     global _current_model, _llm_client
-    if model and model != _current_model:
-        _llm_client = LLMClient(model=model)
-        _current_model = model
-    if _llm_client is None:
-        _llm_client = LLMClient(model="deepseek")
-        _current_model = "deepseek"
-    return _llm_client
+    with _llm_client_lock:
+        if model and model != _current_model:
+            _llm_client = LLMClient(model=model)
+            _current_model = model
+        if _llm_client is None:
+            _llm_client = LLMClient(model="deepseek")
+            _current_model = "deepseek"
+        return _llm_client
 
 
 def set_llm_model(model: str):
     global _current_model, _llm_client
-    _llm_client = LLMClient(model=model)
-    _current_model = model
+    with _llm_client_lock:
+        _llm_client = LLMClient(model=model)
+        _current_model = model

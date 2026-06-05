@@ -4,75 +4,102 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import AsyncIterator
 
 import httpx
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from ai.chat_sessions import get_or_create_session
 from config import DEEPSEEK_MODEL_ID
 from core.chanlun_analysis import run_analysis
+from core.datetime_fmt import format_date_short
 from deps import check_ai_diagnosis_rate_limits, client_ip
 from services.akshare_service import get_stock_info, normalize_stock_code
 
 router = APIRouter()
 log = logging.getLogger(__name__)
 
+_diagnosis_async_client: httpx.AsyncClient | None = None
 
-@router.get("/api/ai/diagnosis", tags=["AI诊股"])
-async def ai_diagnosis(
-    request: Request,
-    code: str = Query(..., description="股票代码"),
-    question: str = Query(..., description="用户问题"),
-    session_id: str = Query("default", description="会话ID"),
-    model: str = Query("deepseek", description="AI模型"),
-):
-    check_ai_diagnosis_rate_limits(client_ip(request))
 
-    log.info(
-        "AI诊断 GET code=%s question=%s session=%s",
-        code,
-        question[:80],
-        session_id,
-    )
+def _get_diagnosis_async_client() -> httpx.AsyncClient:
+    global _diagnosis_async_client
+    if _diagnosis_async_client is None:
+        _diagnosis_async_client = httpx.AsyncClient(
+            timeout=120.0,
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        )
+    return _diagnosis_async_client
 
-    if model not in ("deepseek", "gemini"):
-        model = "deepseek"
 
-    async def event_stream():
-        try:
-            # 必须为首条 yield：run_server 重定向 stdout 后，若在首次 chunk 前写 stdout 可能触发异常导致整块 500
-            yield ": stream-open\n\n"
+class DiagnosisBody(BaseModel):
+    code: str = Field(..., min_length=4, max_length=16, description="股票代码")
+    question: str = Field(..., min_length=1, max_length=8000, description="用户问题")
+    session_id: str = Field("default", max_length=128, description="会话 ID")
+    model: str = Field("deepseek", description="AI 模型：deepseek / gemini")
 
-            log.debug("AI诊断 event_stream 启动 session=%s", session_id)
-            log.debug("AI诊断 准备处理 model=%s", model)
-            sym, _exchange = normalize_stock_code(code)
 
-            stock_name = ""
+def _normalize_model(model: str) -> str:
+    return model if model in ("deepseek", "gemini") else "deepseek"
+
+
+async def _diagnosis_event_stream(
+    code: str,
+    question: str,
+    session_id: str,
+    model: str,
+) -> AsyncIterator[str]:
+    try:
+        yield ": stream-open\n\n"
+
+        sym, _exchange = normalize_stock_code(code)
+
+        async def _load_info() -> tuple[str, str]:
+            name = sym
             try:
-                info = get_stock_info(sym)
-                stock_name = str(info.get("名称", sym))
+                info = await asyncio.to_thread(get_stock_info, sym)
+                name = str(info.get("名称", sym))
             except Exception:
-                stock_name = sym
+                pass
+            return sym, name
 
-            analysis_context = ""
+        async def _load_analysis():
+            return await asyncio.to_thread(run_analysis, sym, "daily")
+
+        info_res, analysis_res = await asyncio.gather(
+            _load_info(),
+            _load_analysis(),
+            return_exceptions=True,
+        )
+
+        if isinstance(info_res, Exception):
+            stock_name = sym
+        else:
+            _, stock_name = info_res
+
+        analysis_context = ""
+        if isinstance(analysis_res, Exception):
+            analysis_context = f"[缠论数据获取失败: {analysis_res}]"
+        else:
+            result = analysis_res
             try:
-                result = await asyncio.to_thread(run_analysis, sym, "daily")
                 recent_kl = result.klines[-20:] if len(result.klines) > 20 else result.klines
                 kl_lines = "\n".join(
-                    f"{k.date[:10]}  开:{k.open:.2f} 高:{k.high:.2f} 低:{k.low:.2f} 收:{k.close:.2f}"
+                    f"{format_date_short(k.date)}  开:{k.open:.2f} 高:{k.high:.2f} 低:{k.low:.2f} 收:{k.close:.2f}"
                     for k in recent_kl
                 )
                 bi_lines = "\n".join(
-                    f"[{b.start[:10]}] {b.direction} 高:{b.high:.2f} 低:{b.low:.2f}"
+                    f"[{format_date_short(b.start)}] {b.direction} 高:{b.high:.2f} 低:{b.low:.2f}"
                     for b in result.bis[-5:]
                 )
                 zs_lines = "\n".join(
-                    f"[{z.start[:10]}] 中枢 高:{z.range_high:.2f} 低:{z.range_low:.2f}"
+                    f"[{format_date_short(z.start)}] 中枢 高:{z.range_high:.2f} 低:{z.range_low:.2f}"
                     for z in result.zhongshus[-3:]
                 )
                 sig_lines = "\n".join(
-                    f"{s.datetime[:10]} {s.type}@{s.price:.2f} 置信:{s.confidence}"
+                    f"{format_date_short(s.datetime)} {s.type}@{s.price:.2f} 置信:{s.confidence}"
                     for s in result.signals[-5:]
                 )
 
@@ -84,9 +111,9 @@ async def ai_diagnosis(
 买卖点：\n{sig_lines or '暂无'}
 趋势：{result.trend}"""
             except Exception as e:
-                analysis_context = f"[缠论数据获取失败: {e}]"
+                analysis_context = f"[缠论数据解析失败: {e}]"
 
-            system_prompt = f"""你是专业的缠论技术分析助手，名称"缠师"。
+        system_prompt = f"""你是专业的缠论技术分析助手，名称"缠师"。
 
 用户会向你询问股票诊断问题。请结合以下缠论数据，
 用通俗易懂的语言给出诊断建议，避免过于专业的术语堆砌。
@@ -103,97 +130,94 @@ async def ai_diagnosis(
 
 重要：如果没有股票数据，请直接说明并建议用户提供股票代码。"""
 
-            session = get_or_create_session(session_id)
-            session.add("user", question)
+        session = get_or_create_session(session_id)
+        session.add("user", question)
 
-            messages = [{"role": "system", "content": system_prompt}] + session.history()
+        messages = [{"role": "system", "content": system_prompt}] + session.history()
 
-            full_text = ""
-            try:
-                if model.startswith("deepseek"):
-                    key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
-                    if not key:
-                        yield f"data: {json.dumps({'error': 'DEEPSEEK_API_KEY 未设置，请在 .env 中配置'}, ensure_ascii=False)}\n\n"
-                        return
+        full_text = ""
+        try:
+            if model.startswith("deepseek"):
+                key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+                if not key:
+                    yield f"data: {json.dumps({'error': 'DEEPSEEK_API_KEY 未设置，请在 .env 中配置'}, ensure_ascii=False)}\n\n"
+                    return
 
-                    log.info("AI诊断 DeepSeek 流式开始 session=%s", session_id)
-                    body = {
-                        "model": DEEPSEEK_MODEL_ID,
-                        "messages": messages,
-                        "temperature": 0.4,
-                        "stream": True,
-                    }
-                    async with httpx.AsyncClient(timeout=120.0) as client:
-                        async with client.stream(
-                            "POST",
-                            "https://api.deepseek.com/v1/chat/completions",
-                            headers={
-                                "Authorization": f"Bearer {key}",
-                                "Content-Type": "application/json",
-                            },
-                            json=body,
-                        ) as resp:
-                            log.info(
-                                "AI诊断 DeepSeek HTTP 状态 session=%s status=%s",
-                                session_id,
-                                resp.status_code,
-                            )
-                            resp.raise_for_status()
-                            async for line in resp.aiter_lines():
-                                if not line.strip() or not line.startswith("data:"):
-                                    continue
-                                data = line[5:].strip()
-                                if data == "[DONE]":
-                                    break
-                                try:
-                                    chunk = json.loads(data)
-                                    content = (
-                                        chunk.get("choices", [{}])[0]
-                                        .get("delta", {})
-                                        .get("content", "")
-                                    )
-                                    if content:
-                                        full_text += content
-                                        yield f"data: {json.dumps({'token': content}, ensure_ascii=False)}\n\n"
-                                except json.JSONDecodeError:
-                                    continue
-                    log.info(
-                        "AI诊断 DeepSeek 完成 session=%s chars=%s",
-                        session_id,
-                        len(full_text),
-                    )
+                log.info("AI诊断 DeepSeek 流式开始 session=%s", session_id)
+                body = {
+                    "model": DEEPSEEK_MODEL_ID,
+                    "messages": messages,
+                    "temperature": 0.4,
+                    "stream": True,
+                }
+                client = _get_diagnosis_async_client()
+                async with client.stream(
+                        "POST",
+                        "https://api.deepseek.com/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=body,
+                    ) as resp:
+                        resp.raise_for_status()
+                        async for line in resp.aiter_lines():
+                            if not line.strip() or not line.startswith("data:"):
+                                continue
+                            data = line[5:].strip()
+                            if data == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data)
+                                content = (
+                                    chunk.get("choices", [{}])[0]
+                                    .get("delta", {})
+                                    .get("content", "")
+                                )
+                                if content:
+                                    full_text += content
+                                    yield f"data: {json.dumps({'token': content}, ensure_ascii=False)}\n\n"
+                            except json.JSONDecodeError:
+                                continue
+                log.info(
+                    "AI诊断 DeepSeek 完成 session=%s chars=%s",
+                    session_id,
+                    len(full_text),
+                )
 
-                elif model.startswith("gemini"):
-                    key = os.environ.get("GEMINI_API_KEY", "").strip()
-                    if not key:
-                        yield f"data: {json.dumps({'error': 'GEMINI_API_KEY 未设置，请在 .env 中配置'}, ensure_ascii=False)}\n\n"
-                        return
+            elif model.startswith("gemini"):
+                key = os.environ.get("GEMINI_API_KEY", "").strip()
+                if not key:
+                    yield f"data: {json.dumps({'error': 'GEMINI_API_KEY 未设置，请在 .env 中配置'}, ensure_ascii=False)}\n\n"
+                    return
 
-                    from ai.llm_client import LLMClient
+                from ai.llm_client import LLMClient
 
-                    gemini_client = LLMClient(model=model)
-                    full_text = gemini_client.chat(
-                        prompt=question,
-                        system=system_prompt,
-                        temperature=0.4,
-                    )
-                    for char in full_text:
-                        yield f"data: {json.dumps({'token': char}, ensure_ascii=False)}\n\n"
-                        await asyncio.sleep(0.02)
-
-            except Exception as e:
-                yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
-
-            session.add("assistant", full_text)
-
-            yield f"data: {json.dumps({'done': True, 'full': full_text}, ensure_ascii=False)}\n\n"
+                gemini_client = LLMClient(model=model)
+                full_text = gemini_client.chat(
+                    prompt=question,
+                    system=system_prompt,
+                    temperature=0.4,
+                )
+                chunk_size = 48
+                for i in range(0, len(full_text), chunk_size):
+                    piece = full_text[i : i + chunk_size]
+                    yield f"data: {json.dumps({'token': piece}, ensure_ascii=False)}\n\n"
 
         except Exception as e:
-            log.exception("AI诊断流未捕获异常 session=%s", session_id)
             yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
 
+        session.add("assistant", full_text)
+        yield f"data: {json.dumps({'done': True, 'full': full_text}, ensure_ascii=False)}\n\n"
+
+    except Exception as e:
+        log.exception("AI诊断流未捕获异常 session=%s", session_id)
+        yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+
+
+def _sse_response(stream: AsyncIterator[str]) -> StreamingResponse:
     return StreamingResponse(
-        event_stream(),
+        stream,
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -202,18 +226,32 @@ async def ai_diagnosis(
     )
 
 
-@router.post("/api/ai/diagnosis", tags=["AI诊股"])
-async def ai_diagnosis_post(
+@router.get("/api/ai/diagnosis", tags=["AI诊股"])
+async def ai_diagnosis_get(
     request: Request,
-    code: str = Query(...),
-    question: str = Query(...),
-    session_id: str = Query("default"),
-    model: str = Query("deepseek"),
+    code: str = Query(..., description="股票代码"),
+    question: str = Query(..., description="用户问题"),
+    session_id: str = Query("default", description="会话ID"),
+    model: str = Query("deepseek", description="AI模型"),
 ):
-    return await ai_diagnosis(
-        request=request,
-        code=code,
-        question=question,
-        session_id=session_id,
-        model=model,
+    """兼容旧版：问题放在 URL 查询参数（长文本不推荐）。"""
+    check_ai_diagnosis_rate_limits(client_ip(request))
+    model = _normalize_model(model)
+    log.info("AI诊断 GET code=%s session=%s", code, session_id)
+    return _sse_response(_diagnosis_event_stream(code, question, session_id, model))
+
+
+@router.post("/api/ai/diagnosis", tags=["AI诊股"])
+async def ai_diagnosis_post(request: Request, body: DiagnosisBody):
+    """推荐：JSON body 传参，避免长问题进 URL。"""
+    check_ai_diagnosis_rate_limits(client_ip(request))
+    model = _normalize_model(body.model)
+    log.info("AI诊断 POST code=%s session=%s", body.code, body.session_id)
+    return _sse_response(
+        _diagnosis_event_stream(
+            body.code.strip(),
+            body.question.strip(),
+            body.session_id.strip() or "default",
+            model,
+        )
     )

@@ -56,7 +56,12 @@ export default defineConfig(({ mode }) => {
           ],
         },
         workbox: {
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+          globPatterns: [
+            'index.html',
+            'assets/**/*.{js,css,woff2}',
+            'favicon.ico',
+            'pwa-192.svg',
+          ],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
@@ -98,6 +103,7 @@ export default defineConfig(({ mode }) => {
             if (!id.includes('node_modules')) return
 
             if (id.includes('echarts')) return 'vendor-echarts'
+            if (id.includes('axios')) return 'vendor-axios'
             if (id.includes('vue-router')) return 'vendor-router'
             if (id.includes('pinia')) return 'vendor-pinia'
             if (id.includes('/vue/')) return 'vendor-vue'

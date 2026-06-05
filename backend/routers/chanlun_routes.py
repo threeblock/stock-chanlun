@@ -13,11 +13,14 @@ from ai.llm_client import get_llm_client
 from ai.strategy_engine import StrategyEngine
 from ai.wave_classifier import WaveClassifier
 from chanlun.elements import ChanlunAnalysis
-from chanlun.engine import ChanlunEngine
-from core.chanlun_analysis import get_kline_df_for_ai, level_to_period, run_analysis
+from core.chanlun_analysis import (
+    DEFAULT_KLINE_LIMIT,
+    chanlun_cache_key,
+    get_kline_df_for_ai,
+    run_analysis,
+)
 from core.chanlun_response import serialize_chanlun_analysis
 from deps import check_chanlun_rate_limits, client_ip
-from services.akshare_service import get_kline_hist
 from utils import ai_signal_llm_cache, ai_signal_rule_cache, chanlun_cache
 
 router = APIRouter()
@@ -47,11 +50,10 @@ async def chanlun_multi_level(
         description="逗号分隔的分析级别，如 daily,weekly,30min",
     ),
 ):
-    check_chanlun_rate_limits(client_ip(request))
-    t0 = time.time()
-
     level_list = [l.strip() for l in levels.split(",") if l.strip()]
     level_list = list(dict.fromkeys(level_list))
+    check_chanlun_rate_limits(client_ip(request), tokens=min(len(level_list), 4))
+    t0 = time.time()
 
     def _serialize_result(result: ChanlunAnalysis) -> dict:
         return {
@@ -86,25 +88,13 @@ async def chanlun_multi_level(
 
     def _safe_analyze(level: str) -> tuple[str, dict | str]:
         try:
-            cache_key = f"{code}:{level}"
-            cached = chanlun_cache.get(cache_key)
-            if cached is not None:
-                return level, _serialize_result(cached)
-
-            period = level_to_period(level)
-            df = get_kline_hist(code, period=period, adjust="qfq")
-            if df.empty or len(df) < 20:
-                return level, "数据不足"
-
-            engine = ChanlunEngine(df)
-            result = engine.analyze(level=level)
-            result.stock_code = code
-            chanlun_cache.set(cache_key, result)
+            result = run_analysis(code, level, kline_limit=DEFAULT_KLINE_LIMIT)
             return level, _serialize_result(result)
         except HTTPException:
             return level, "数据不足"
-        except Exception as e:
-            return level, str(e)
+        except Exception:
+            log.debug("多级别缠论分析失败 code=%s level=%s", code, level, exc_info=True)
+            return level, "数据不足"
 
     def _run_pool():
         with ThreadPoolExecutor(max_workers=min(len(level_list), 4)) as pool:
@@ -159,14 +149,11 @@ def build_ai_signal_response(code: str, level: str, model: str, use_llm: bool) -
     resonance = None
     if level == "30min":
         try:
-            daily_key = f"{code}:daily"
+            daily_key = chanlun_cache_key(code, "daily", DEFAULT_KLINE_LIMIT)
             daily_result = chanlun_cache.get(daily_key)
             if daily_result is None:
-                daily_df = get_kline_hist(code, period="daily", adjust="qfq")
-                if not daily_df.empty and len(daily_df) >= 20:
-                    daily_result = ChanlunEngine(daily_df.tail(500)).analyze(level="daily")
-                    daily_result.stock_code = code
-                    chanlun_cache.set(daily_key, daily_result)
+                daily_result = run_analysis(code, "daily", kline_limit=DEFAULT_KLINE_LIMIT)
+                chanlun_cache.set(daily_key, daily_result)
             if daily_result is not None:
                 daily_cls = WaveClassifier().classify(
                     daily_result.xiangs,

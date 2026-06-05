@@ -57,7 +57,7 @@ class ChanlunEngine:
         signals = sig_detector.detect_all()
         trend = sig_detector.detect_trend()
 
-        # 6. K线对象（必须先创建，再传给支撑阻力位计算）
+        # 6. K 线对象：API/图表用原始 OHLC（笔/中枢在引擎内基于包含处理后序列计算，前端 dateToIdxRobust 映射）
         kline_objects = self._to_klines()
 
         # 5b. 支撑阻力位
@@ -80,9 +80,11 @@ class ChanlunEngine:
             support_resistance=support_resistance
         )
 
-    def _to_klines(self) -> list[KLine]:
+    def _to_klines(self, df: pd.DataFrame | None = None) -> list[KLine]:
+        """默认返回原始 K 线窗口；传入 df 时可序列化任意 DataFrame。"""
+        source = df if df is not None else self.raw_klines
         rows: list[KLine] = []
-        for row in self.raw_klines.itertuples(index=False):
+        for row in source.itertuples(index=False):
             d = row.date
             if hasattr(d, "to_pydatetime"):
                 d = d.to_pydatetime()

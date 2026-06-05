@@ -26,12 +26,20 @@
           <span class="ph-count">{{ total }} 只成分股</span>
         </div>
         <div class="ph-right">
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm refresh-btn"
+            :disabled="refreshing"
+            @click="handleRefresh"
+          >
+            {{ refreshing ? '刷新中…' : '刷新' }}
+          </button>
           <span class="ph-type-badge">{{ boardType === 'industry' ? '行业板块' : '概念板块' }}</span>
         </div>
       </div>
 
       <!-- 加载中 -->
-      <div v-if="loading" class="skeleton-list">
+      <div v-if="loading && stocks.length === 0" class="skeleton-list">
         <div v-for="i in 12" :key="i" class="skeleton-row" />
       </div>
 
@@ -42,7 +50,7 @@
           <line x1="12" y1="16" x2="12.01" y2="16"/>
         </svg>
         <p>{{ error }}</p>
-        <button class="btn btn-primary" @click="fetchData">重试</button>
+        <button class="btn btn-primary" @click="fetchData(true)">重试</button>
       </div>
 
       <!-- 空状态 -->
@@ -67,12 +75,14 @@
         <!-- 行区域（虚拟滚动） -->
         <div class="vscroll-wrap" v-bind="containerProps">
           <div class="vscroll-spacer" v-bind="wrapperProps">
+            <div class="vscroll-inner" :style="{ transform: `translateY(${offsetY}px)` }">
             <div
               v-for="s in visibleItems"
               :key="s.code"
               class="table-row"
               :style="{ height: ROW_H + 'px' }"
               @click="goToStock(s.code)"
+              v-bind="stockLinkPrefetchHandlers(s.code)"
             >
               <span class="rank-cell">
                 <span class="rank-num" :class="rankClass(s.rank)">#{{ s.rank }}</span>
@@ -102,6 +112,7 @@
                 </button>
               </span>
             </div>
+            </div>
           </div>
         </div>
         <!-- 总数提示 -->
@@ -112,27 +123,26 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { stockApi, type SectorStock } from '@/api/stock'
+import type { SectorStock } from '@/api/stock'
 import { useWatchlistStore } from '@/stores/watchlist'
 import toast from '@/composables/useToast'
 import { useVirtualScroll } from '@/composables/useVirtualScroll'
+import { useSectorData } from '@/composables/useSectorData'
+import { stockLinkPrefetchHandlers } from '@/utils/prefetchStock'
 
 const route = useRoute()
 const router = useRouter()
 const watchlistStore = useWatchlistStore()
 
 const sectorName = computed(() => String(route.params.name || ''))
-const stocks = ref<SectorStock[]>([])
-const total = ref(0)
-const boardType = ref<'industry' | 'concept' | null>(null)
-const loading = ref(true)
-const error = ref('')
+const { stocks, total, boardType, loading, error, fetchData } = useSectorData(sectorName)
+const refreshing = ref(false)
 
 // 虚拟滚动（行业板块常有几百只成分股）
 const ROW_H = 48
-const { visibleItems, containerProps, wrapperProps } = useVirtualScroll<SectorStock>({
+const { visibleItems, containerProps, wrapperProps, offsetY } = useVirtualScroll<SectorStock>({
   items: stocks,
   itemHeight: ROW_H,
   overscan: 5,
@@ -166,23 +176,16 @@ function goToStock(code: string) {
   router.push(`/stock/${code}`)
 }
 
-async function fetchData() {
-  loading.value = true
-  error.value = ''
+async function handleRefresh() {
+  refreshing.value = true
   try {
-    const res = await stockApi.sectorStocks(sectorName.value)
-    stocks.value = res.data.stocks ?? []
-    total.value = res.data.total ?? 0
-    boardType.value = res.data.board_type as 'industry' | 'concept' | null
-  } catch (e: any) {
-    error.value = e?.message ?? '加载失败'
+    await fetchData(true)
   } finally {
-    loading.value = false
+    refreshing.value = false
   }
 }
 
 onMounted(() => {
-  fetchData()
   watchlistStore.fetchWatchlist()
 })
 </script>
@@ -223,6 +226,8 @@ onMounted(() => {
 /* Header */
 .page-header { display: flex; align-items: center; justify-content: space-between; }
 .ph-left { display: flex; align-items: baseline; gap: 12px; }
+.ph-right { display: flex; align-items: center; gap: 10px; }
+.refresh-btn { min-width: 64px; }
 .ph-title { font-size: 1.5rem; font-weight: 700; margin: 0; }
 .ph-count { font-size: 0.85rem; color: var(--text-muted); }
 .ph-type-badge {
@@ -258,6 +263,9 @@ onMounted(() => {
   border-radius: 8px;
 }
 .table-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   background: var(--bg-secondary);
   font-size: 0.72rem;
   text-transform: uppercase;
@@ -315,6 +323,7 @@ onMounted(() => {
 .vscroll-wrap::-webkit-scrollbar-track { background: transparent; }
 .vscroll-wrap::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
 .vscroll-spacer { position: relative; }
+.vscroll-inner { width: 100%; }
 .vscroll-count {
   padding: 8px 16px;
   font-size: 0.72rem;

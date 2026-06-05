@@ -25,7 +25,7 @@
               title="Gemini"
             >GM</button>
           </div>
-          <button class="btn btn-ghost" @click="loadData" :disabled="loadingAny">
+          <button class="btn btn-ghost" @click="refreshData" :disabled="loadingAny">
             {{ loadingAny ? '加载中...' : '刷新' }}
           </button>
           <button class="btn btn-ghost" @click="toggleWatch" :class="{ 'btn-danger': isWatching, 'btn-loading': watchToggling }" :disabled="loadingAny || watchToggling">
@@ -37,7 +37,7 @@
     </nav>
 
     <!-- 全局加载骨架屏 -->
-    <div v-if="loadingAny" class="loading-overlay">
+    <div v-if="showInitialLoading" class="loading-overlay">
       <div class="loading-progress">
         <div class="loading-steps">
           <div v-for="step in loadingSteps" :key="step.key" class="loading-step" :class="step.status">
@@ -58,7 +58,7 @@
         </svg>
       </div>
       <p class="error-message">{{ error }}</p>
-      <button class="btn btn-primary" @click="loadData">
+      <button class="btn btn-primary" @click="refreshData">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
         </svg>
@@ -297,7 +297,6 @@
         </div>
 
         <KLineChart
-          ref="klineChartRef"
           :klines="store.klines"
           :bis="store.chanlunResult?.bis || []"
           :xiangs="store.chanlunResult?.xiangs || []"
@@ -306,13 +305,8 @@
           :ai-signal="store.aiSignal"
           :support-resistance="store.chanlunResult?.supportResistance || []"
           :indicators="store.indicators"
-          :loading="store.loadingKline"
-          @zoom-change="onZoomChange"
+          :loading="store.loadingChart"
         />
-        <VolumeChart v-if="store.indicators.volume" :klines="store.klines" :zoom-start="zoomStart" :zoom-end="zoomEnd" class="sub-chart" />
-        <MACDChart v-if="store.indicators.macd" :klines="store.klines" :zoom-start="zoomStart" :zoom-end="zoomEnd" class="sub-chart" />
-        <RSIChart v-if="store.indicators.rsi" :klines="store.klines" :zoom-start="zoomStart" :zoom-end="zoomEnd" class="sub-chart" />
-        <SKDJChart v-if="store.indicators.skdj" :klines="store.klines" :zoom-start="zoomStart" :zoom-end="zoomEnd" class="sub-chart" />
       </div>
 
       <!-- Right: AI Strategy + Notes -->
@@ -322,6 +316,7 @@
           :signal="store.aiSignal"
           :updated-at="store.aiUpdatedAt"
           :loading="store.loadingAI"
+          :level-trends="levelTrends"
           @deep-analyze="onDeepAnalyze"
         />
       </aside>
@@ -332,35 +327,35 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, watch, onUnmounted, nextTick, defineAsyncComponent } from 'vue'
 import { useRoute } from 'vue-router'
 import type { LevelOption } from '../stores/chanlun'
 import { useWatchlistStore } from '../stores/watchlist'
 import type { StockInfoFields, StockExtras, Quote } from '../api/stock'
 import toast from '../composables/useToast'
+import { resolveApiBaseURL } from '../api/stock'
 import { useStockPage } from '../composables/useStockPage'
-import KLineChart from '../components/Chart/KLineChart.vue'
-import VolumeChart from '../components/Chart/VolumeChart.vue'
-import MACDChart from '../components/Chart/MACDChart.vue'
-import RSIChart from '../components/Chart/RSIChart.vue'
-import SKDJChart from '../components/Chart/SKDJChart.vue'
+import { useMultiLevelTrends } from '../composables/useMultiLevelTrends'
+import { useVisibilityRefresh } from '../composables/useVisibilityRefresh'
+import { API_CACHE_TTL } from '../utils/apiCache'
+const KLineChart = defineAsyncComponent(
+  () => import('../components/Chart/KLineChart.vue'),
+)
 import SignalCard from '../components/Signal/SignalCard.vue'
 import StrategyCard from '../components/Signal/StrategyCard.vue'
 import IndicatorSelector from '../components/IndicatorSelector.vue'
 import CommentSection from '../components/Signal/CommentSection.vue'
-import AiSuspendedBallChat from '../components/AiSuspendedBallChat.vue'
+const AiSuspendedBallChat = defineAsyncComponent(
+  () => import('../components/AiSuspendedBallChat.vue'),
+)
 
 const route = useRoute()
-const { store, quote, stockInfo, extras, loadStock, changeLevel: changeLevelBase, refreshAIStrategy } = useStockPage()
+const { store, quote, stockInfo, extras, loadStock, changeLevel: changeLevelBase, refreshAIStrategy, refreshQuotes } = useStockPage()
 
 async function changeLevel(level: LevelOption) {
   await changeLevelBase(stockCode.value, level)
 }
 const watchlistStore = useWatchlistStore()
-const klineChartRef = ref<InstanceType<typeof KLineChart> | null>(null)
-
-const zoomStart = ref(0)
-const zoomEnd = ref(100)
 
 const watchToggling = ref(false)
 
@@ -368,19 +363,20 @@ const isWatching = computed(() =>
   watchlistStore.stocks.some(s => s.code === stockCode.value)
 )
 
-function onZoomChange(start: number, end: number) {
-  zoomStart.value = start
-  zoomEnd.value = end
-}
-
 const stockCode = computed(() => route.params.code as string)
+const { levelTrends } = useMultiLevelTrends(stockCode)
 const currentLevel = computed(() => store.currentLevel)
 const loadingAny = computed(() =>
   store.loadingKline || store.loadingChanlun
 )
 
+/** 首屏无 K 线时全屏加载；已有数据时仅局部刷新，避免遮挡图表 */
+const showInitialLoading = computed(
+  () => loadingAny.value && !store.klines.length && !store.chanlunResult,
+)
+
 const loadingSteps = computed(() => [
-  { key: 'kline', label: 'K线数据', status: store.loadingKline ? 'loading' : store.klines.length ? 'done' : 'pending' },
+  { key: 'kline', label: 'K线数据', status: (store.loadingChanlun || store.loadingKline) ? 'loading' : store.klines.length ? 'done' : 'pending' },
   { key: 'chanlun', label: '缠论分析', status: store.loadingChanlun ? 'loading' : store.chanlunResult ? 'done' : 'pending' },
   { key: 'ai', label: 'AI策略', status: store.loadingAI ? 'loading' : store.aiSignal ? 'done' : 'pending' },
 ])
@@ -688,13 +684,18 @@ const financeRows = computed((): InfoRow[] => {
 
 // 注：已移除个股页中间竖栏（盘口/板块/新闻），相关展示逻辑不再需要
 
-async function loadData() {
+async function loadData(force = false) {
   await loadStock(
     stockCode.value,
     currentLevel.value,
     startDate.value || undefined,
     endDate.value || undefined,
+    { force },
   )
+}
+
+function refreshData() {
+  void loadData(true)
 }
 
 async function onDeepAnalyze() {
@@ -744,7 +745,8 @@ function formatVolume(v?: number) {
 function exportCSV() {
   const code = stockCode.value
   const level = currentLevel.value
-  window.open(`/api/stocks/${code}/export?level=${level}`, '_blank')
+  const url = `${resolveApiBaseURL()}/stocks/${encodeURIComponent(code)}/export?level=${encodeURIComponent(level)}`
+  window.open(url, '_blank')
 }
 
 // 键盘快捷键
@@ -757,7 +759,7 @@ function handleKeydown(e: KeyboardEvent) {
   switch (e.key) {
     case 'r':
     case 'R':
-      if (!loadingAny.value) loadData()
+      if (!loadingAny.value) loadData(true)
       break
     case '1':
       changeLevel('1min')
@@ -782,16 +784,22 @@ function handleKeydown(e: KeyboardEvent) {
 
 onMounted(() => {
   loadLayout()
+  void watchlistStore.fetchWatchlist()
   loadData()
   window.addEventListener('keydown', handleKeydown)
 })
+
+useVisibilityRefresh(
+  () => refreshQuotes(stockCode.value),
+  API_CACHE_TTL.quote,
+)
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown)
   cleanupLayoutPanelHandler()
 })
 
-watch(() => route.params.code, loadData)
+watch(() => route.params.code, () => { void loadData() })
 
 watch(layout, persistLayout, { deep: true })
 </script>
@@ -998,8 +1006,6 @@ watch(layout, persistLayout, { deep: true })
 .chart-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
 .chart-action-btn { font-size: 0.72rem; padding: 5px 10px; display: flex; align-items: center; gap: 4px; }
 .chart-timestamp { font-size: 0.65rem; color: var(--text-muted); font-family: var(--font-mono); white-space: nowrap; }
-.sub-chart { height: 100px; }
-
 .layout-control { position: relative; }
 .layout-panel {
   position: absolute;

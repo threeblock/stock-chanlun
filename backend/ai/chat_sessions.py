@@ -51,6 +51,11 @@ def _prune_sessions(now: float) -> None:
         _chat_sessions.pop(sid, None)
 
 
+def chat_session_stats() -> dict:
+    with _session_lock:
+        return {"active_sessions": len(_chat_sessions), "max_sessions": _MAX_SESSIONS}
+
+
 def get_or_create_session(session_id: str) -> ChatSession:
     now = time.time()
     key = session_id.strip()[:120] or "default"

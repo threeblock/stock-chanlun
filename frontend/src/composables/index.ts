@@ -26,8 +26,37 @@ export { useVisibilityRefresh } from './useVisibilityRefresh'
 // 首页大盘数据
 export { useHomeDashboard, emptyMarketOverview, formatNewsTime } from './useHomeDashboard'
 
+export { useDebouncedStockSearch } from './useDebouncedStockSearch'
+export type { StockSearchHit } from './useDebouncedStockSearch'
+
+export { usePersistedPcScreenFilters, usePersistedMobileScreenFilters } from './usePersistedScreenFilters'
+
 // 个股页数据加载
 export { useStockPage } from './useStockPage'
+
+// 板块成分股（缓存优先）
+export { useSectorData } from './useSectorData'
+
+// 选股 SSE 流
+export { useScreenStream } from './useScreenStream'
+
+export { useMultiLevelTrends } from './useMultiLevelTrends'
+export type { LevelTrendChip } from './useMultiLevelTrends'
+
+export {
+  onStockLinkHover,
+  onStockLinkTouch,
+  onSectorLinkHover,
+  onSectorLinkTouch,
+  prefetchStockChanlun,
+  prefetchMultiLevelChanlun,
+  prefetchStockRouteChunks,
+  stockLinkPrefetchHandlers,
+  sectorLinkPrefetchHandlers,
+} from '../utils/prefetchStock'
+
+// K 线副图指标（MACD/RSI/SKDJ 一次计算）
+export { useKlineIndicators } from './useKlineIndicators'
 
 // 全局 Loading
 export { useLoading, globalLoading } from './useLoading'

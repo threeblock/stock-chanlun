@@ -85,64 +85,121 @@
 
       <div class="filter-actions">
         <button class="btn btn-ghost" @click="resetFilters">重置</button>
-        <button class="btn btn-primary" @click="doScreen" :disabled="screening">
-          {{ screening ? '筛选中...' : '开始筛选' }}
+        <button v-if="screening" type="button" class="btn btn-ghost stop-screen-btn" @click="stopScreen">
+          停止筛选
+        </button>
+        <button v-else type="button" class="btn btn-primary" @click="doScreen">
+          开始筛选
         </button>
       </div>
     </div>
 
     <div v-if="screening" class="results-loading">
+      <p v-if="isRetrying && screenError" class="retry-hint">{{ screenError }}</p>
       <div class="progress-wrap">
         <div class="progress-bar">
           <div class="progress-fill" :style="{ width: progressPct + '%' }" />
         </div>
         <span class="progress-text">{{ progressDone }} / {{ progressTotal }} 只</span>
       </div>
-      <div class="spinner" />
-      <span>筛选分析中...</span>
+      <p v-if="results.length > 0" class="partial-hint">已命中 {{ results.length }} 只，可提前停止</p>
+      <button type="button" class="btn btn-ghost btn-sm" @click="stopScreen">停止筛选</button>
+      <div v-if="results.length === 0" class="spinner" />
+      <span>{{ isRetrying ? '正在重连…' : results.length > 0 ? '持续筛选中…' : '筛选分析中...' }}</span>
     </div>
 
-    <div v-else-if="screenError" class="results-error">
+    <div v-else-if="screenError && results.length === 0" class="results-error">
       <p>{{ screenError }}</p>
       <button class="btn btn-ghost" @click="doScreen">重试</button>
     </div>
 
-    <template v-else-if="results.length > 0">
+    <template v-if="results.length > 0">
+      <p v-if="screenError" class="partial-hint">{{ screenError }}</p>
       <div class="results-head">
         <span class="results-count">共 <b>{{ total }}</b> 支符合条件的股票</span>
+        <button type="button" class="btn btn-ghost btn-sm export-btn" @click="exportResults">导出</button>
       </div>
-      <div class="results-list">
+      <div class="sort-bar">
         <button
-          v-for="s in results.slice(0, displayLimit)"
-          :key="s.code"
-          class="result-row"
-          @click="go(`/m/stock/${s.code}`)"
+          v-for="opt in sortOptions"
+          :key="opt.key"
+          type="button"
+          class="sort-chip"
+          :class="{ active: sortKey === opt.key }"
+          @click="cycleSort(opt.key)"
         >
-          <div class="rr-left">
-            <div class="rr-name">{{ s.name }}</div>
-            <div class="rr-meta">
-              <span class="rr-code mono">{{ s.code }}</span>
-              <span v-if="s.industry" class="rr-industry">{{ s.industry }}</span>
-            </div>
-          </div>
-          <div class="rr-center">
-            <div class="rr-price mono">{{ s.price > 0 ? s.price.toFixed(2) : '—' }}</div>
-            <div class="rr-vol">{{ fmtVol(s.volume) }}</div>
-          </div>
-          <div class="rr-right">
-            <div
-              class="rr-pct mono"
-              :class="s.change_pct > 0 ? 'price-up' : s.change_pct < 0 ? 'price-down' : 'price-flat'"
-            >{{ s.change_pct > 0 ? '+' : '' }}{{ s.change_pct.toFixed(2) }}%</div>
-            <span v-if="s.latest_signal" class="rr-signal badge" :class="signalBadgeClass(s.latest_signal)">
-              {{ s.latest_signal }}
-            </span>
-          </div>
+          {{ opt.label }}{{ sortKey === opt.key ? (sortDir === 'desc' ? ' ↓' : ' ↑') : '' }}
         </button>
       </div>
-      <button v-if="results.length > displayLimit" class="load-more-btn" @click="displayLimit += PAGE_SIZE">
-        加载更多（{{ results.length - displayLimit }} 条）
-      </button>
+      <div
+        class="results-list"
+        :class="{ 'vscroll-wrap': enableVirtualScroll }"
+        v-bind="enableVirtualScroll ? containerProps : {}"
+      >
+        <div v-if="enableVirtualScroll" class="vscroll-spacer" v-bind="wrapperProps">
+          <div class="vscroll-inner" :style="{ transform: `translateY(${offsetY}px)` }">
+            <button
+              v-for="s in displayItems"
+              :key="s.code"
+              class="result-row"
+              :style="{ height: ROW_H + 'px' }"
+              @click="go(`/m/stock/${s.code}`)"
+              v-bind="stockLinkPrefetchHandlers(s.code)"
+            >
+              <div class="rr-left">
+                <div class="rr-name">{{ s.name }}</div>
+                <div class="rr-meta">
+                  <span class="rr-code mono">{{ s.code }}</span>
+                  <span v-if="s.industry" class="rr-industry">{{ s.industry }}</span>
+                </div>
+              </div>
+              <div class="rr-center">
+                <div class="rr-price mono">{{ s.price > 0 ? s.price.toFixed(2) : '—' }}</div>
+                <div class="rr-vol">{{ fmtVol(s.volume) }}</div>
+              </div>
+              <div class="rr-right">
+                <div
+                  class="rr-pct mono"
+                  :class="s.change_pct > 0 ? 'price-up' : s.change_pct < 0 ? 'price-down' : 'price-flat'"
+                >{{ s.change_pct > 0 ? '+' : '' }}{{ s.change_pct.toFixed(2) }}%</div>
+                <span v-if="s.latest_signal" class="rr-signal badge" :class="signalBadgeClass(s.latest_signal)">
+                  {{ s.latest_signal }}
+                </span>
+              </div>
+            </button>
+          </div>
+        </div>
+        <template v-else>
+          <button
+            v-for="s in displayItems"
+            :key="s.code"
+            class="result-row"
+            @click="go(`/m/stock/${s.code}`)"
+            v-bind="stockLinkPrefetchHandlers(s.code)"
+          >
+            <div class="rr-left">
+              <div class="rr-name">{{ s.name }}</div>
+              <div class="rr-meta">
+                <span class="rr-code mono">{{ s.code }}</span>
+                <span v-if="s.industry" class="rr-industry">{{ s.industry }}</span>
+              </div>
+            </div>
+            <div class="rr-center">
+              <div class="rr-price mono">{{ s.price > 0 ? s.price.toFixed(2) : '—' }}</div>
+              <div class="rr-vol">{{ fmtVol(s.volume) }}</div>
+            </div>
+            <div class="rr-right">
+              <div
+                class="rr-pct mono"
+                :class="s.change_pct > 0 ? 'price-up' : s.change_pct < 0 ? 'price-down' : 'price-flat'"
+              >{{ s.change_pct > 0 ? '+' : '' }}{{ s.change_pct.toFixed(2) }}%</div>
+              <span v-if="s.latest_signal" class="rr-signal badge" :class="signalBadgeClass(s.latest_signal)">
+                {{ s.latest_signal }}
+              </span>
+            </div>
+          </button>
+        </template>
+      </div>
     </template>
   </div>
 </template>
@@ -150,9 +207,24 @@
 <script setup lang="ts">
 import { ref, reactive, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { resolveApiBaseURL, stockApi, type StockScreenResult } from '@/api/stock'
+import type { StockScreenResult } from '@/api/stock'
+import { usePersistedMobileScreenFilters } from '@/composables/usePersistedScreenFilters'
+import { useScreenStream } from '@/composables/useScreenStream'
+import { useVirtualScroll } from '@/composables/useVirtualScroll'
+import { downloadScreenResultsCsv } from '@/utils/exportScreenCsv'
+import { sortRows, type SortDir } from '@/utils/sortRows'
+import { stockLinkPrefetchHandlers } from '@/utils/prefetchStock'
 
 const router = useRouter()
+const {
+  loading: screening,
+  screenError,
+  isRetrying,
+  results,
+  progress,
+  runScreen: runScreenStream,
+  stopScreen,
+} = useScreenStream()
 
 const signalOptions = [
   { label: '一买', value: '一买' },
@@ -173,14 +245,49 @@ const filters = reactive({
   signals: '',
 })
 
-const results = ref<StockScreenResult[]>([])
-const total = ref(0)
-const screening = ref(false)
-const screenError = ref('')
-const progressDone = ref(0)
-const progressTotal = ref(0)
-const PAGE_SIZE = 20
-const displayLimit = ref(PAGE_SIZE)
+const { persistNow: persistScreenFilters } = usePersistedMobileScreenFilters(filters)
+
+type ScreenSortKey = 'change_pct' | 'name' | 'price'
+const sortKey = ref<ScreenSortKey>('change_pct')
+const sortDir = ref<SortDir>('desc')
+const sortOptions = [
+  { key: 'change_pct' as const, label: '涨跌幅' },
+  { key: 'name' as const, label: '名称' },
+  { key: 'price' as const, label: '现价' },
+]
+
+function cycleSort(key: ScreenSortKey) {
+  if (sortKey.value === key) {
+    sortDir.value = sortDir.value === 'desc' ? 'asc' : 'desc'
+  } else {
+    sortKey.value = key
+    sortDir.value = key === 'name' ? 'asc' : 'desc'
+  }
+}
+
+const sortedResults = computed(() =>
+  sortRows<StockScreenResult>(results.value, sortKey.value, sortDir.value),
+)
+
+const total = computed(() => results.value.length)
+const progressDone = computed(() => progress.value.done)
+const progressTotal = computed(() => progress.value.total)
+const ROW_H = 68
+const enableVirtualScroll = computed(() => sortedResults.value.length > 30)
+const {
+  visibleItems,
+  containerProps,
+  wrapperProps,
+  offsetY,
+} = useVirtualScroll({
+  items: sortedResults,
+  itemHeight: ROW_H,
+  overscan: 4,
+  maxHeight: 480,
+})
+const displayItems = computed(() =>
+  enableVirtualScroll.value ? visibleItems.value : sortedResults.value,
+)
 const progressPct = computed(() => {
   if (!progressTotal.value) return 0
   return Math.round(progressDone.value / progressTotal.value * 100)
@@ -195,76 +302,30 @@ function resetFilters() {
   filters.pb_max = undefined
   filters.signals = ''
   results.value = []
-  total.value = 0
 }
 
 async function doScreen() {
-  screening.value = true
-  screenError.value = ''
-  results.value = []
-  displayLimit.value = PAGE_SIZE
-  progressDone.value = 0
-  progressTotal.value = 0
-  const params: Parameters<typeof stockApi.screenStocks>[0] = {}
-  if (filters.change_pct_min != null) params.change_pct_min = filters.change_pct_min
-  if (filters.change_pct_max != null) params.change_pct_max = filters.change_pct_max
-  if (filters.volume_min != null) params.volume_min = filters.volume_min
-  if (filters.volume_max != null) params.volume_max = filters.volume_max
-  if (filters.pe_max != null) params.pe_max = filters.pe_max
-  if (filters.pb_max != null) params.pb_max = filters.pb_max
-  if (filters.signals) params.signals = filters.signals
-  try {
-    const p = { ...params, level: 'daily', pool_size: 100 }
-    const qs = new URLSearchParams()
-    qs.set('level', 'daily')
-    qs.set('pool_size', '100')
-    qs.set('max_results', '50')
-    if (p.change_pct_min != null) qs.set('change_pct_min', String(p.change_pct_min))
-    if (p.change_pct_max != null) qs.set('change_pct_max', String(p.change_pct_max))
-    if (p.volume_min != null) qs.set('volume_min', String(p.volume_min))
-    if (p.volume_max != null) qs.set('volume_max', String(p.volume_max))
-    if (p.pe_max != null) qs.set('pe_max', String(p.pe_max))
-    if (p.pb_max != null) qs.set('pb_max', String(p.pb_max))
-    if (p.signals) qs.set('signals', p.signals)
-    const resp = await fetch(`${resolveApiBaseURL()}/stocks/screen-stream?${qs.toString()}`)
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-    const reader = resp.body!.getReader()
-    const decoder = new TextDecoder()
-    let buf = ''
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buf += decoder.decode(value, { stream: true })
-      const lines = buf.split('\n')
-      buf = lines.pop() ?? ''
-      for (const line of lines) {
-        const raw = line.trim()
-        if (!raw.startsWith('data: ')) continue
-        try {
-          const item = JSON.parse(raw.slice(6))
-          if (item.type === 'progress') {
-            progressDone.value = item.done
-            progressTotal.value = item.total
-          } else if (item.type === 'result') {
-            results.value.push(item.data as StockScreenResult)
-          } else if (item.type === 'done') {
-            total.value = results.value.length
-            screening.value = false
-            return
-          }
-        } catch {/* ignore */}
-      }
-    }
-  } catch (e: any) {
-    screenError.value = e?.message ?? '筛选失败，请检查网络后重试'
-    results.value = []
-  } finally {
-    screening.value = false
-  }
+  persistScreenFilters()
+  await runScreenStream({
+    change_pct_min: filters.change_pct_min,
+    change_pct_max: filters.change_pct_max,
+    volume_min: filters.volume_min,
+    volume_max: filters.volume_max,
+    pe_max: filters.pe_max,
+    pb_max: filters.pb_max,
+    signals: filters.signals || undefined,
+    level: 'daily',
+    pool_size: 100,
+    max_results: 200,
+  })
 }
 
 function go(path: string) {
   router.push(path)
+}
+
+function exportResults() {
+  downloadScreenResultsCsv(sortedResults.value)
 }
 
 function fmtVol(v?: number) {
@@ -398,6 +459,20 @@ function signalBadgeClass(type: string) {
   color: var(--text-secondary);
   font-size: 0.875rem;
 }
+
+.retry-hint,
+.partial-hint {
+  margin: 0;
+  width: 100%;
+  max-width: 300px;
+  padding: 8px 10px;
+  font-size: 0.78rem;
+  text-align: center;
+  color: var(--accent-amber, #f59e0b);
+  background: rgba(245, 158, 11, 0.08);
+  border-radius: 6px;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}
 .spinner {
   width: 28px;
   height: 28px;
@@ -450,6 +525,26 @@ function signalBadgeClass(type: string) {
   align-items: center;
   justify-content: space-between;
 }
+.sort-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sort-chip {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.sort-chip.active {
+  border-color: rgba(56, 189, 248, 0.45);
+  color: var(--accent-cyan);
+  background: rgba(56, 189, 248, 0.1);
+}
 .results-count {
   font-size: 0.82rem;
   color: var(--text-muted);
@@ -464,6 +559,14 @@ function signalBadgeClass(type: string) {
   flex-direction: column;
   gap: 6px;
 }
+.vscroll-wrap {
+  overflow-y: auto;
+  max-height: 480px;
+  gap: 0;
+}
+.vscroll-spacer { position: relative; width: 100%; }
+.vscroll-inner { width: 100%; }
+.vscroll-wrap .result-row { margin-bottom: 6px; }
 
 .result-row {
   display: flex;
@@ -549,19 +652,4 @@ function signalBadgeClass(type: string) {
   font-size: 0.65rem;
   padding: 2px 6px;
 }
-
-.load-more-btn {
-  width: 100%;
-  padding: 12px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--bg-card);
-  color: var(--accent-blue);
-  font-size: 0.82rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s;
-  text-align: center;
-}
-.load-more-btn:active { background: var(--bg-hover); }
 </style>

@@ -70,6 +70,7 @@
 
             <!-- 缠论信号 Tab -->
             <div v-if="activeTab === 'signals'" class="tab-signals">
+              <MultiLevelTrendChips v-if="levelTrends.length" :trends="levelTrends" class="sheet-level-trends" />
               <!-- 走势判断 -->
               <div v-if="chanlunResult" class="trend-block">
                 <div class="trend-badge" :class="trendClass">
@@ -110,12 +111,12 @@
 
             <!-- AI策略 Tab -->
             <div v-if="activeTab === 'ai'" class="tab-ai">
-              <MobileAIChat :stock-code="stockCode" />
+              <MobileAIChat v-if="modelValue" :stock-code="stockCode" />
             </div>
 
             <!-- 笔记 Tab -->
             <div v-if="activeTab === 'comment'" class="tab-comment">
-              <MobileCommentSection :stock-code="stockCode" />
+              <MobileCommentSection v-if="modelValue" :stock-code="stockCode" />
             </div>
 
           </div>
@@ -126,11 +127,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, defineAsyncComponent } from 'vue'
 import type { Quote, StockInfoFields, Signal, AISignal } from '@/api/stock'
 import { useCommentStore } from '@/stores/comment'
-import MobileCommentSection from './MobileCommentSection.vue'
-import MobileAIChat from './MobileAIChat.vue'
+import { useVolumeFormatter } from '@/composables/useFormatters'
+import { useMultiLevelTrends } from '@/composables/useMultiLevelTrends'
+import MultiLevelTrendChips from '@/components/Signal/MultiLevelTrendChips.vue'
+
+const MobileCommentSection = defineAsyncComponent(
+  () => import('./MobileCommentSection.vue'),
+)
+const MobileAIChat = defineAsyncComponent(() => import('./MobileAIChat.vue'))
 
 const props = defineProps<{
   modelValue: boolean
@@ -145,11 +152,14 @@ const props = defineProps<{
   aiSignal: AISignal | null
 }>()
 
+const { levelTrends } = useMultiLevelTrends(() => props.stockCode)
+
 defineEmits<{
   'update:modelValue': [val: boolean]
 }>()
 
 const commentStore = useCommentStore()
+const { formatVolume, formatAmount } = useVolumeFormatter()
 const commentCount = computed(() => commentStore.getComments(props.stockCode).length)
 
 const tabs = [
@@ -175,17 +185,11 @@ function signalBadgeClass(type: string) {
 }
 
 function fmtVol(v?: number) {
-  if (!v) return '—'
-  if (v >= 1e8) return (v / 1e8).toFixed(2) + '亿'
-  if (v >= 1e4) return (v / 1e4).toFixed(2) + '万'
-  return String(v)
+  return formatVolume(v ?? null)
 }
 
 function fmtAmt(v?: number) {
-  if (!v) return '—'
-  if (v >= 1e8) return (v / 1e8).toFixed(2) + '亿'
-  if (v >= 1e4) return (v / 1e4).toFixed(2) + '万'
-  return v.toFixed(0)
+  return formatAmount(v ?? null)
 }
 
 const infoRows = computed(() => {
@@ -356,6 +360,9 @@ const infoRows = computed(() => {
 .info-value { font-size: 0.82rem; font-weight: 600; }
 
 /* ── Signals ── */
+.sheet-level-trends {
+  margin-bottom: 12px;
+}
 .trend-block {
   margin-bottom: 16px;
 }

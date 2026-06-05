@@ -71,7 +71,7 @@ class LRUCache:
 
 
 # ── 缠论分析结果缓存（5分钟 TTL，最多缓存 256 只股票） ──────────────────────
-chanlun_cache = LRUCache(maxsize=256, ttl=300.0)
+chanlun_cache = LRUCache(maxsize=128, ttl=300.0)
 
 # ── AI 策略信号缓存：规则 90s / LLM 5 分钟 ───────────────────────────────────
 ai_signal_rule_cache = LRUCache(maxsize=128, ttl=90.0)
@@ -79,6 +79,11 @@ ai_signal_llm_cache = LRUCache(maxsize=64, ttl=300.0)
 
 # 自选股行情聚合（15s，减轻批量 quote 压力）
 watchlist_quote_cache = LRUCache(maxsize=8, ttl=15.0)
+
+# 大盘概览 / 板块成分 / 财经新闻（与前端 API_CACHE_TTL 对齐）
+market_overview_cache = LRUCache(maxsize=4, ttl=60.0)
+sector_board_cache = LRUCache(maxsize=64, ttl=120.0)
+stock_news_cache = LRUCache(maxsize=8, ttl=120.0)
 
 
 # ── HTTP 重试装饰器 ─────────────────────────────────────────────────────────
@@ -206,6 +211,10 @@ class RateLimiter:
         with self._lock:
             self._counts.pop(key, None)
 
+    def tracked_key_count(self) -> int:
+        with self._lock:
+            return len(self._counts)
+
 
 # ── 限流：全局限流 + 按客户端 IP（见 deps.check_*）──────────────────────────
 chanlun_global_limiter = RateLimiter(max_calls=500, window_seconds=60.0)
@@ -214,3 +223,5 @@ kline_global_limiter = RateLimiter(max_calls=1000, window_seconds=60.0)
 kline_ip_limiter = RateLimiter(max_calls=200, window_seconds=60.0)
 ai_diagnosis_global_limiter = RateLimiter(max_calls=120, window_seconds=60.0)
 ai_diagnosis_ip_limiter = RateLimiter(max_calls=30, window_seconds=60.0)
+light_global_limiter = RateLimiter(max_calls=2000, window_seconds=60.0)
+light_ip_limiter = RateLimiter(max_calls=300, window_seconds=60.0)

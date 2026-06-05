@@ -23,19 +23,12 @@ def calculate_macd(
     df: pd.DataFrame,
     fast: int = 12,
     slow: int = 26,
-    signal: int = 9
+    signal: int = 9,
 ) -> pd.DataFrame:
-    """
-    计算 MACD 指标
-    返回 DataFrame 追加 dif/dea/bar 列
-    """
-    df = df.copy()
-    ema_fast = df['close'].ewm(span=fast, adjust=False).mean()
-    ema_slow = df['close'].ewm(span=slow, adjust=False).mean()
-    df['dif'] = ema_fast - ema_slow
-    df['dea'] = df['dif'].ewm(span=signal, adjust=False).mean()
-    df['bar'] = (df['dif'] - df['dea']) * 2
-    return df
+    """计算 MACD 指标，返回追加 dif/dea/bar 列的 DataFrame。"""
+    from core.indicators import calculate_macd_df
+
+    return calculate_macd_df(df, fast=fast, slow=slow, signal=signal)
 
 
 def calculate_rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:

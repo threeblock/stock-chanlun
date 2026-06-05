@@ -172,8 +172,10 @@ def _fetch_em_article_news(limit: int) -> list:
         return []
 
 
-# 简单的内存缓存（带上限，避免长时间运行无限增长）
-_cache: dict = {}
+# 简单的内存缓存（LRU，避免热 key 被 FIFO 误驱逐）
+from collections import OrderedDict
+
+_cache: OrderedDict[str, tuple] = OrderedDict()
 _CACHE_MAX_ENTRIES = 512
 _cache_lock = threading.RLock()
 
@@ -185,6 +187,7 @@ def _cache_get(key: str):
             return None
         data, timestamp, ttl = entry
         if datetime.now().timestamp() - timestamp < ttl:
+            _cache.move_to_end(key)
             return data
         _cache.pop(key, None)
         return None
@@ -192,10 +195,10 @@ def _cache_get(key: str):
 
 def _cache_set(key: str, data, ttl: int = 60):
     with _cache_lock:
-        if key not in _cache and len(_cache) >= _CACHE_MAX_ENTRIES:
-            overflow = len(_cache) - _CACHE_MAX_ENTRIES + 1
-            for old_key in list(_cache.keys())[:overflow]:
-                _cache.pop(old_key, None)
+        if key in _cache:
+            _cache.move_to_end(key)
+        elif len(_cache) >= _CACHE_MAX_ENTRIES:
+            _cache.popitem(last=False)
         _cache[key] = (data, datetime.now().timestamp(), ttl)
 
 
@@ -299,14 +302,17 @@ def get_kline_hist(
     period: str = "daily",
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    adjust: str = "qfq"
+    adjust: str = "qfq",
+    limit: int = 500,
 ) -> pd.DataFrame:
     """
     获取历史K线数据
     period: daily/weekly/monthly/5/15/30/60 分钟
     adjust: qfq=前复权 hfq=后复权 None=不复权
+    limit: 最多返回根数（与缠论/图表窗口对齐，纳入缓存键）
     """
-    cache_key = f"kline:{code}:{period}:{start_date}:{end_date}:{adjust}"
+    limit = max(20, min(int(limit), 2000))
+    cache_key = f"kline:{code}:{period}:{adjust}:{limit}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
@@ -338,11 +344,11 @@ def get_kline_hist(
     else:
         adjust_suffix = ""
 
-    # 默认获取500条数据
-    limit = 500
+    # 默认获取 limit 条数据（腾讯 API 单次上限约 2000）
+    fetch_limit = limit
 
     try:
-        url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_{period_qq}{adjust_suffix}&param={mkt}{sym},{period_qq},,,{limit},{adjust_suffix}"
+        url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_{period_qq}{adjust_suffix}&param={mkt}{sym},{period_qq},,,{fetch_limit},{adjust_suffix}"
         client = _get_client()
         resp = client.get(url)
         text = resp.text
@@ -390,6 +396,8 @@ def get_kline_hist(
         df = pd.DataFrame(records)
         if not df.empty:
             df['date'] = pd.to_datetime(df['date'])
+            if len(df) > limit:
+                df = df.tail(limit).reset_index(drop=True)
             # 分钟数据缓存 30 秒（盘中波动大）；日线缓存 5 分钟
             _cache_set(cache_key, df, ttl=30 if period in minute_periods else 300)
         return df
@@ -473,12 +481,12 @@ def get_a_share_market_breadth() -> dict:
 
     result = _fetch_em_breadth_via_clist()
     if result and (result["advancers"] + result["decliners"] + result["unchanged"]) >= 500:
-        _cache_set(cache_key, result, ttl=60)
+        _cache_set(cache_key, result, ttl=300)
         return result
 
     result = _fetch_sina_breadth_paginated()
     if result and (result["advancers"] + result["decliners"] + result["unchanged"]) > 0:
-        _cache_set(cache_key, result, ttl=60)
+        _cache_set(cache_key, result, ttl=300)
         return result
 
     log.warning("[涨跌家数] 所有来源均失败")
@@ -658,7 +666,7 @@ def _fetch_em_industry_boards() -> list[dict]:
         js = _em_clist_request(
             {
                 "pn": 1,
-                "pz": 200,
+                "pz": 500,
                 "po": 1,
                 "np": 1,
                 "fltt": 2,
@@ -698,7 +706,7 @@ def _fetch_em_concept_boards() -> list[dict]:
         js = _em_clist_request(
             {
                 "pn": 1,
-                "pz": 200,
+                "pz": 500,
                 "po": 1,
                 "np": 1,
                 "fltt": 2,
@@ -970,7 +978,7 @@ def get_board_constituents_em(board_name: str) -> dict:
             "/api/qt/clist/get",
             {
                 "pn": 1,
-                "pz": 200,
+                "pz": 500,
                 "po": 1,
                 "np": 1,
                 "ut": "bd1d9ddb04089700cf9c27f6f7426281",
@@ -1035,27 +1043,54 @@ def get_board_constituents_em(board_name: str) -> dict:
     return out
 
 
+def akshare_cache_stats() -> dict:
+    """内存行情缓存统计（供 /health）。"""
+    with _cache_lock:
+        return {"entries": len(_cache), "max_entries": _CACHE_MAX_ENTRIES}
+
+
 def get_market_overview_bundle() -> dict:
     """聚合：主要指数 + 涨跌家数 + 全部行业板块（供 /api/market/overview）"""
-    indices = {
-        "sh": _normalize_index_row("000001", "上证指数"),
-        "sz": _normalize_index_row("399001", "深证成指"),
-        "cyb": _normalize_index_row("399006", "创业板指"),
-        "kc50": _normalize_index_row("000688", "科创50"),
-        "hs300": _normalize_index_row("399300", "沪深300"),
-        "zz500": _normalize_index_row("000905", "中证500"),
-    }
+    cache_key = "market_overview:bundle:v1"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    index_specs = [
+        ("sh", "000001", "上证指数"),
+        ("sz", "399001", "深证成指"),
+        ("cyb", "399006", "创业板指"),
+        ("kc50", "000688", "科创50"),
+        ("hs300", "399300", "沪深300"),
+        ("zz500", "000905", "中证500"),
+    ]
+    indices: dict = {}
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = {
+            pool.submit(_normalize_index_row, sym, label): key
+            for key, sym, label in index_specs
+        }
+        for future in as_completed(futures):
+            key = futures[future]
+            try:
+                indices[key] = future.result()
+            except Exception:
+                log.debug("指数行情获取失败 key=%s", key, exc_info=True)
+                indices[key] = {}
     breadth = get_a_share_market_breadth()
     all_boards = get_all_industry_boards()
     top5 = all_boards[:5]
     bottom5 = list(reversed(all_boards[-5:]))
-    return {
+    out = {
         "indices": indices,
         "market_breadth": breadth,
         "sectors": all_boards,
         "sectors_top": top5,
         "sectors_bottom": bottom5,
+        "stale": False,
     }
+    _cache_set(cache_key, out, ttl=60)
+    return out
 
 
 def _parse_sina_suggest(text: str) -> list[dict]:
@@ -1529,6 +1564,44 @@ def get_stock_boards_em(code: str) -> dict:
     return out
 
 
+def _fetch_em_symbol_news(code: str, limit: int) -> list:
+    """东方财富个股新闻（直连 HTTP，避免 akshare 额外开销）。"""
+    sym, _ = normalize_stock_code(code)
+    market_prefix = "SH" if sym.startswith(("5", "6", "9")) else "SZ"
+    secu_code = f"{market_prefix}{sym}"
+    try:
+        client = _get_client()
+        url = (
+            "https://np-listapi.eastmoney.com/comm/web/getNewsByColumns"
+            f"?client=web&biz=web_news_col&column=350&page_index=1&page_size={limit}"
+            f"&req_trace=1&fields=title,showtime,mediaName,url,uniqueUrl"
+            f"&secuCode={secu_code}"
+        )
+        resp = client.get(
+            url,
+            timeout=8,
+            headers={"Referer": "https://quote.eastmoney.com/"},
+        )
+        js = resp.json()
+        raw = (js.get("data") or {}).get("list") or []
+        items = []
+        for item in raw[:limit]:
+            title = str(item.get("title") or "").strip()
+            if not title:
+                continue
+            link = str(item.get("uniqueUrl") or item.get("url") or "").strip()
+            items.append({
+                "title": title[:300],
+                "time": str(item.get("showtime") or "")[:32],
+                "source": str(item.get("mediaName") or "")[:48],
+                "url": link if link.startswith("http") else "",
+            })
+        return items
+    except Exception as e:
+        log.debug("[个股新闻] HTTP 失败 %s: %s", code, e)
+        return []
+
+
 def get_stock_symbol_news_em(code: str, limit: int = 8) -> list:
     """东方财富个股相关新闻。"""
     limit = max(1, min(20, int(limit)))
@@ -1537,42 +1610,9 @@ def get_stock_symbol_news_em(code: str, limit: int = 8) -> list:
     if cached is not None:
         return cached
 
-    sym, _ = normalize_stock_code(code)
-    try:
-        import akshare as ak
-
-        df = ak.stock_news_em(symbol=sym)
-        if df is None or df.empty:
-            _cache_set(cache_key, [], ttl=300)
-            return []
-
-        ncols = len(df.columns)
-        title_i = 1 if ncols > 1 else 0
-        time_i = 3 if ncols > 3 else min(2, ncols - 1)
-        src_i = 4 if ncols > 4 else min(3, ncols - 1)
-        url_i = 5 if ncols > 5 else ncols - 1
-
-        items = []
-        for _, row in df.head(limit).iterrows():
-            try:
-                title = str(row.iloc[title_i]).strip()
-                url = str(row.iloc[url_i]).strip()
-                if not title:
-                    continue
-                items.append({
-                    "title": title[:300],
-                    "time": str(row.iloc[time_i]).strip()[:32] if ncols > time_i else "",
-                    "source": str(row.iloc[src_i]).strip()[:48] if ncols > src_i else "",
-                    "url": url if url.startswith("http") else "",
-                })
-            except (IndexError, TypeError, ValueError):
-                continue
-
-        _cache_set(cache_key, items, ttl=300)
-        return items
-    except Exception as e:
-        log.warning(f"[个股新闻] 失败 {code}: {e}")
-        return []
+    items = _fetch_em_symbol_news(code, limit)
+    _cache_set(cache_key, items, ttl=600)
+    return items
 
 
 # ─── 分时数据 ────────────────────────────────────────────────────────────────
@@ -1583,8 +1623,10 @@ def get_minute_data(code: str, period: str = "5") -> pd.DataFrame:
     if cached is not None:
         return cached
 
-    # 分钟数据使用日K接口的分钟数据
-    return get_kline_hist(code, period=period, adjust="qfq")
+    df = get_kline_hist(code, period=period, adjust="qfq")
+    if not df.empty:
+        _cache_set(cache_key, df, ttl=60)
+    return df
 
 
 # ─── 新浪分钟数据 ─────────────────────────────────────────────────────────────

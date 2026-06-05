@@ -10,6 +10,8 @@ from utils import (
     chanlun_ip_limiter,
     kline_global_limiter,
     kline_ip_limiter,
+    light_global_limiter,
+    light_ip_limiter,
 )
 
 
@@ -22,15 +24,22 @@ def client_ip(request: Request) -> str:
     return "unknown"
 
 
-def check_chanlun_rate_limits(ip: str) -> None:
-    """Global + per-IP limits for 缠论 / AI 策略等重计算接口."""
-    if not chanlun_global_limiter.try_acquire("global"):
-        raise HTTPException(status_code=429, detail="服务繁忙，请稍后重试")
-    if not chanlun_ip_limiter.try_acquire(ip):
-        raise HTTPException(
-            status_code=429,
-            detail="缠论分析请求过于频繁，请稍后再试",
-        )
+def check_chanlun_rate_limits(ip: str, tokens: int = 1) -> None:
+    """Global + per-IP limits for 缠论 / AI 策略 / 选股等重计算接口."""
+    tokens = max(1, min(tokens, 8))
+    for _ in range(tokens):
+        if not chanlun_global_limiter.try_acquire("global"):
+            raise HTTPException(status_code=429, detail="服务繁忙，请稍后重试")
+        if not chanlun_ip_limiter.try_acquire(ip):
+            raise HTTPException(
+                status_code=429,
+                detail="缠论分析请求过于频繁，请稍后再试",
+            )
+
+
+def check_screening_rate_limits(ip: str) -> None:
+    """选股接口：消耗更多令牌（与并发缠论分析成本对齐）。"""
+    check_chanlun_rate_limits(ip, tokens=3)
 
 
 def check_kline_rate_limits(ip: str) -> None:
@@ -41,6 +50,17 @@ def check_kline_rate_limits(ip: str) -> None:
         raise HTTPException(
             status_code=429,
             detail="K 线请求过于频繁，请稍后再试",
+        )
+
+
+def check_light_api_rate_limits(ip: str) -> None:
+    """搜索 / 热门 / 新闻 / 评论等轻量读接口。"""
+    if not light_global_limiter.try_acquire("global"):
+        raise HTTPException(status_code=429, detail="服务繁忙，请稍后重试")
+    if not light_ip_limiter.try_acquire(ip):
+        raise HTTPException(
+            status_code=429,
+            detail="请求过于频繁，请稍后再试",
         )
 
 
