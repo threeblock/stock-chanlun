@@ -94,6 +94,22 @@
           <div class="cond-divider" />
 
           <div class="cond-section">
+            <div class="cond-title">市场选择</div>
+            <div class="market-btns">
+              <button class="market-btn" :class="{ active: params.market === 'A' }" @click="params.market = 'A'">
+                <span class="market-icon">🇨🇳</span>
+                <span class="market-label">A股</span>
+              </button>
+              <button class="market-btn" :class="{ active: params.market === 'NASDAQ' }" @click="params.market = 'NASDAQ'">
+                <span class="market-icon">🇺🇸</span>
+                <span class="market-label">纳斯达克</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="cond-divider" />
+
+          <div class="cond-section">
             <div class="cond-title">候选池</div>
             <div class="cond-row">
               <label class="cond-label">候选池大小</label>
@@ -322,6 +338,7 @@ const params = reactive({
   dual_cross: false,
   level: 'daily',
   pool_size: 100,
+  market: 'A' as 'A' | 'NASDAQ',  // A股或美股纳斯达克
 })
 
 const signalOptions = [
@@ -376,6 +393,7 @@ async function runScreen() {
     dual_cross: !!p.dual_cross,
     level: p.level ?? 'daily',
     pool_size: p.pool_size,
+    market: params.market,  // 添加市场类型参数
     max_results: 200,
   })
 }
@@ -513,34 +531,49 @@ function trendClass(trend: string): string {
 .toggle-label { font-size: 0.8rem; color: var(--text-secondary); }
 
 /* Level buttons */
-.level-btns { display: flex; gap: 4px; flex-wrap: wrap; }
+.level-btns { display: flex; gap: 8px; flex-wrap: wrap; }
 .level-btn {
-  padding: 4px 10px;
+  padding: 6px 14px;
   border-radius: 6px;
   border: 1px solid var(--border);
-  background: var(--bg-primary);
+  background: var(--bg-card);
   color: var(--text-secondary);
-  font-size: 0.78rem;
+  font-size: 0.82rem;
+  font-weight: 500;
   cursor: pointer;
   transition: all 0.15s;
 }
 .level-btn:hover { border-color: var(--accent-blue); color: var(--accent-blue); }
-.level-btn.active { background: rgba(56,189,248,0.12); border-color: var(--accent-blue); color: var(--accent-blue); font-weight: 600; }
+.level-btn.active { background: var(--accent-blue); color: #fff; border-color: var(--accent-blue); }
 
-/* Pool buttons */
-.pool-btns { display: flex; gap: 4px; }
-.pool-btn {
-  padding: 4px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg-primary);
+/* 市场选择按钮 */
+.market-btns { display: flex; gap: 10px; }
+.market-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  border: 2px solid var(--border);
+  background: var(--bg-card);
   color: var(--text-secondary);
-  font-size: 0.78rem;
+  font-size: 0.9rem;
+  font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all 0.2s;
 }
-.pool-btn:hover { border-color: var(--accent-blue); color: var(--accent-blue); }
-.pool-btn.active { background: rgba(56,189,248,0.12); border-color: var(--accent-blue); color: var(--accent-blue); font-weight: 600; }
+.market-btn:hover { border-color: var(--accent-blue); background: var(--bg-hover); }
+.market-btn.active {
+  border-color: var(--accent-blue);
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--accent-blue);
+}
+.market-icon { font-size: 1.2rem; }
+.market-label { font-size: 0.85rem; }
+
+.pool-btns { display: flex; gap: 8px; flex-wrap: wrap; }
 
 .run-btn {
   width: 100%;

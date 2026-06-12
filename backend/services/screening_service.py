@@ -11,6 +11,7 @@ from core.chanlun_analysis import SCREENING_KLINE_LIMIT, run_analysis
 from core.kline_serialize import analysis_klines_to_df
 from services.akshare_service import (
     get_daily_hot_stocks,
+    get_nasdaq_hot_stocks,
     get_realtime_quote,
     get_stock_boards_em,
     get_stock_info,
@@ -219,6 +220,7 @@ def screen_stocks_stream(
     level: str = "daily",
     pool_size: int = 100,
     max_results: int = 50,
+    market: str = "A",  # A股或美股（nasdaq）
 ):
     """
     选股主入口（生成器版）。yield 每条符合条件的结果，前端可边算边展示。
@@ -230,9 +232,15 @@ def screen_stocks_stream(
     """
     t0 = time.time()
 
-    hot_list = get_daily_hot_stocks(pool_size)
+    # 根据市场类型获取候选池
+    if market.upper() == "NASDAQ" or market.upper() == "US":
+        hot_list = get_nasdaq_hot_stocks(pool_size)
+        log.info("[美股-纳斯达克] 选股候选池获取 count=%s elapsed=%.1fs", len(hot_list), time.time() - t0)
+    else:
+        hot_list = get_daily_hot_stocks(pool_size)
+        log.info("选股候选池获取 count=%s elapsed=%.1fs", len(hot_list), time.time() - t0)
+    
     t1 = time.time()
-    log.info("选股候选池获取 count=%s elapsed=%.1fs", len(hot_list), t1 - t0)
     if not hot_list:
         yield {"type": "done", "total": 0}
         return
@@ -391,25 +399,27 @@ def screen_stocks(
     level: str = "daily",
     pool_size: int = 100,
     max_results: int = 50,
-) -> list[dict]:
-    """选股主入口（兼容版）。内部调用生成器，等全部算完返回列表。"""
-    output = []
-    for item in screen_stocks_stream(
-        change_pct_min=change_pct_min,
-        change_pct_max=change_pct_max,
-        volume_min=volume_min,
-        volume_max=volume_max,
-        industry=industry,
-        pe_max=pe_max,
-        pb_max=pb_max,
-        signal_types=signal_types,
-        require_dual_cross=require_dual_cross,
-        level=level,
-        pool_size=pool_size,
-        max_results=max_results,
-    ):
-        if item["type"] == "result":
-            output.append(item["data"])
-            if len(output) >= max_results:
-                break
-    return output
+    market: str = "A",  # A股或美股（nasdaq）
+):
+    """
+    选股主入口（生成器版）。yield 每条符合条件的结果，前端可边算边展示。
+
+    yield dict:
+        type: "progress" → { done, total }  进度
+        type: "result"   → 选股结果 dict
+        type: "done"     → None（全部完成）
+    """
+    t0 = time.time()
+
+    # 根据市场类型获取候选池
+    if market.upper() == "NASDAQ" or market.upper() == "US":
+        hot_list = get_nasdaq_hot_stocks(pool_size)
+        log.info("[美股-纳斯达克] 选股候选池获取 count=%s elapsed=%.1fs", len(hot_list), time.time() - t0)
+    else:
+        hot_list = get_daily_hot_stocks(pool_size)
+        log.info("选股候选池获取 count=%s elapsed=%.1fs", len(hot_list), time.time() - t0)
+    
+    t1 = time.time()
+    if not hot_list:
+        yield {"type": "done", "total": 0}
+        return

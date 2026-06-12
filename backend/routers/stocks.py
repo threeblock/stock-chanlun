@@ -83,6 +83,7 @@ async def screen_stocks_api(
         pattern="^(1min|5min|15min|30min|60min|daily|weekly|monthly)$",
     ),
     pool_size: int = Query(100, ge=10, le=1000, description="候选池大小（最高 1000）"),
+    market: str = Query("A", description="市场类型：A=A股，NASDAQ=美股纳斯达克"),
 ):
     check_screening_rate_limits(client_ip(request))
     from services.screening_service import screen_stocks
@@ -106,6 +107,7 @@ async def screen_stocks_api(
             require_dual_cross=dual_cross,
             level=level,
             pool_size=pool_size,
+            market=market,
         )
 
     results = await asyncio.to_thread(_run)
@@ -130,6 +132,7 @@ def screen_stocks_stream_api(
     ),
     pool_size: int = Query(100, ge=10, le=1000, description="候选池大小（最高 1000）"),
     max_results: int = Query(50, ge=1, le=200, description="最多返回条数"),
+    market: str = Query("A", description="市场类型：A=A股，NASDAQ=美股纳斯达克"),
 ):
     check_screening_rate_limits(client_ip(request))
     from services.screening_service import screen_stocks_stream
@@ -154,6 +157,7 @@ def screen_stocks_stream_api(
             level=level,
             pool_size=pool_size,
             max_results=max_results,
+            market=market,
         )
 
         def _next_item():

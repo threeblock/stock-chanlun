@@ -1680,3 +1680,59 @@ def _get_minute_data_sina(code: str, market: str, period: str, adjust: str = "qf
     except Exception as e:
         log.warning(f"新浪分钟数据获取失败 {code} {period}: {e}")
         return pd.DataFrame()
+
+
+def get_nasdaq_hot_stocks(limit: int = 100) -> list:
+    """
+    获取纳斯达克热门股票（按涨跌幅排序）。
+    使用东方财富美股接口，返回 [{ code, name, change_pct, price, volume, rank }]。
+    """
+    limit = max(1, int(limit))
+    cache_key = f"hot:nasdaq:{limit}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        client = _get_client()
+        # 东方财富美股接口：fs=m:105+t:3 表示纳斯达克
+        url = (
+            "http://push2.eastmoney.com/api/qt/clist/get"
+            "?pn=1&pz={limit}&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281"
+            "&fltt=2&invt=2&fid=f3&fs=m:105+t:3"
+            "&fields=f2,f3,f4,f12,f14,f5,f6"
+        ).format(limit=limit)
+        
+        resp = client.get(url, timeout=15, headers={"Referer": "https://quote.eastmoney.com/"})
+        js = resp.json()
+        diff = (js.get("data") or {}).get("diff") or []
+        
+        stocks = []
+        for idx, row in enumerate(diff, start=1):
+            try:
+                price = float(row.get("f2", 0) or 0)
+                chg = float(row.get("f3", 0) or 0)
+                vol = float(row.get("f5", 0) or 0)
+            except (TypeError, ValueError):
+                price, chg, vol = 0.0, 0.0, 0.0
+            
+            code = str(row.get("f12", "") or "").strip()
+            name = str(row.get("f14", "") or "").strip()
+            if not code:
+                continue
+            
+            stocks.append({
+                "code": code,
+                "name": name,
+                "change_pct": round(chg, 2),
+                "price": round(price, 2),
+                "volume": round(vol / 100, 2) if vol > 0 else 0,  # 转换为手
+                "rank": idx,
+            })
+        
+        _cache_set(cache_key, stocks, ttl=300)
+        log.info(f"[美股-纳斯达克] 获取成功 count={len(stocks)}")
+        return stocks
+    except Exception as e:
+        log.warning(f"[美股-纳斯达克] 获取失败: {e}")
+        return []
