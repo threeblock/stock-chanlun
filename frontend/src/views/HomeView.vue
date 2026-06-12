@@ -281,10 +281,11 @@
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
                     <polyline points="18 15 12 9 6 15"/>
                   </svg>
-                  领涨
+                  领涨板块
                 </div>
                 <ul class="sectors-list">
-                  <li v-for="(s, i) in sectorTopList" :key="'t-' + i" class="sector-item" @click="goSector(s.name)" v-bind="sectorLinkPrefetchHandlers(s.name)">
+                  <li v-for="(s, i) in sectorTopList" :key="'t-' + i" class="sector-item sector-item-up" @click="goSector(s.name)" v-bind="sectorLinkPrefetchHandlers(s.name)">
+                    <span class="si-rank">{{ i + 1 }}</span>
                     <span class="si-name">{{ s.name }}</span>
                     <span class="si-pct mono price-up">+{{ s.change_pct.toFixed(2) }}%</span>
                   </li>
@@ -295,14 +296,13 @@
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
                     <polyline points="6 9 12 15 18 9"/>
                   </svg>
-                  领跌
+                  领跌板块
                 </div>
                 <ul class="sectors-list">
-                  <li v-for="(s, i) in sectorBottomList" :key="'b-' + i" class="sector-item" @click="goSector(s.name)" v-bind="sectorLinkPrefetchHandlers(s.name)">
+                  <li v-for="(s, i) in sectorBottomList" :key="'b-' + i" class="sector-item sector-item-down" @click="goSector(s.name)" v-bind="sectorLinkPrefetchHandlers(s.name)">
+                    <span class="si-rank">{{ i + 1 }}</span>
                     <span class="si-name">{{ s.name }}</span>
-                    <span class="si-pct mono"
-                      :class="s.change_pct >= 0 ? 'price-up' : 'price-down'"
-                    >{{ s.change_pct >= 0 ? '+' : '' }}{{ s.change_pct.toFixed(2) }}%</span>
+                    <span class="si-pct mono price-down">{{ s.change_pct.toFixed(2) }}%</span>
                   </li>
                 </ul>
               </div>
@@ -953,24 +953,73 @@ onUnmounted(() => {
 .pill-pct { font-size: 0.7rem; font-weight: 600; }
 
 /* 领涨领跌 */
-.sectors-split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.sectors-split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 @media (max-width: 480px) { .sectors-split { grid-template-columns: 1fr; } }
 .split-label {
   display: flex;
   align-items: center;
-  gap: 4px;
-  font-size: 0.7rem;
+  gap: 5px;
+  font-size: 0.75rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 8px;
+  letter-spacing: 0.6px;
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid var(--border);
 }
-.split-label-up { color: var(--accent-red); }
-.split-label-down { color: var(--accent-green); }
-.sectors-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.sector-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 0.8rem; }
-.si-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.si-pct { flex-shrink: 0; font-weight: 700; }
+.split-label-up { color: var(--accent-red); border-bottom-color: rgba(239, 68, 68, 0.3); }
+.split-label-down { color: var(--accent-green); border-bottom-color: rgba(34, 197, 94, 0.3); }
+.sectors-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.sector-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  font-size: 0.82rem;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  background: var(--bg-secondary);
+  border: 1px solid transparent;
+}
+.sector-item:hover {
+  background: var(--bg-hover);
+  border-color: var(--border);
+  transform: translateX(2px);
+}
+.sector-item-up:hover { border-left: 3px solid var(--accent-red); }
+.sector-item-down:hover { border-left: 3px solid var(--accent-green); }
+.si-rank {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: var(--bg-card);
+  border-radius: 4px;
+}
+.si-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.si-pct {
+  flex-shrink: 0;
+  font-weight: 700;
+  font-size: 0.85rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.05);
+}
+.price-up .si-pct { background: rgba(239, 68, 68, 0.1); }
+.price-down .si-pct { background: rgba(34, 197, 94, 0.1); }
 
 /* ── 热门股面板：双列网格，与左侧同排等高 ── */
 .panel-hot {

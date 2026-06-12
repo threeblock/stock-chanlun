@@ -25,6 +25,10 @@ export function formatNewsTime(t: string): string {
     const dd = String(d.getDate()).padStart(2, '0')
     const hh = String(d.getHours()).padStart(2, '0')
     const mi = String(d.getMinutes()).padStart(2, '0')
+    // 如果时间是 00:00，只显示日期部分（避免显示 "06-12 00:00" 这种不自然的格式）
+    if (hh === '00' && mi === '00') {
+      return `${mm}-${dd}`
+    }
     return `${mm}-${dd} ${hh}:${mi}`
   } catch {
     return t

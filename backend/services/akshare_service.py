@@ -86,7 +86,7 @@ def _fetch_em_breaking_news(limit: int) -> list:
             "https://np-anotice-stock.eastmoney.com/api/security/ann"
             f"?sr=-1&page_size={limit}&page_index=1"
             "&ann_type=A&client_source=web"
-            "&fields=title,notice_date,art_code,source"
+            "&fields=title,notice_date,art_code,source,display_time"
         )
         resp = client.get(url, timeout=10, headers={"Referer": "https://data.eastmoney.com/"})
         js = resp.json()
@@ -96,9 +96,17 @@ def _fetch_em_breaking_news(limit: int) -> list:
             title = str(item.get("title", "") or "").strip()
             if not title:
                 continue
+            # 优先使用 display_time（精确到秒），格式如 "2026-06-12 07:38:29:212"
+            raw_time = str(item.get("display_time", "") or "").strip()
+            if raw_time and len(raw_time) >= 19:
+                # 截取前19位："2026-06-12 07:38:29"
+                time_str = raw_time[:19]
+            else:
+                # 兜底使用 notice_date
+                time_str = str(item.get("notice_date", "") or "")[:19]
             news.append({
                 "title": title,
-                "time": str(item.get("notice_date", "") or "")[:16],
+                "time": time_str,
                 "source": "东方财富",
                 "url": f"https://data.eastmoney.com/notices/{item.get('art_code', '')}.html",
                 "digest": "",
