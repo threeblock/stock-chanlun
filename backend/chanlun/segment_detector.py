@@ -20,54 +20,80 @@ class SegmentDetector:
         self.bis = bis
 
     def detect_segments(self, min_overlap_bis: int = 3, max_iterations: int = 10000) -> list[XiangSegment]:
-        """检测线段"""
+        """
+        线段检测（特征序列破坏法 + 趋势转折辅助）：
+
+        向上线段终结条件（满足任一即终结）：
+          a) 标准：down笔低点 < 前一down笔低点
+          b) 辅助：up笔高点 < 前一up笔高点（高点不再创新高，趋势衰竭）
+
+        向下线段终结条件（对称）：
+          a) 标准：up笔高点 > 前一up笔高点
+          b) 辅助：down笔低点 > 前一down笔低点（低点不再创新低）
+
+        线段至少包含3笔。
+        """
         if len(self.bis) < 3:
             return []
 
         segments: list[XiangSegment] = []
-        i = 0
-        iterations = 0
+        seg_start_idx = 0
 
-        while i <= len(self.bis) - min_overlap_bis:
-            # 防止死循环
-            iterations += 1
-            if iterations > max_iterations:
-                break
+        while seg_start_idx < len(self.bis) - 2:
+            seg_direction = self.bis[seg_start_idx].direction
+            end_idx = seg_start_idx + 2
 
-            # 取连续3笔检查重叠
-            group = self.bis[i:i + min_overlap_bis]
-            if self._has_overlap(group):
-                # 检查是否可延伸
-                start = group[0].start
-                end = group[-1].end
-                direction = group[0].direction
-                high = max(b.high for b in group)
-                low = min(b.low for b in group)
-                start_price = group[0].start_price
-                end_price = group[-1].end_price
-                bi_ids = [b.id for b in group]
+            broken = False
+            j = seg_start_idx + 2
+            while j < len(self.bis):
+                current_bi = self.bis[j]
 
-                # 尝试延伸
-                extended = True
-                extend_iterations = 0
-                while extended and extend_iterations < 1000:
-                    extended = False
-                    extend_iterations += 1
-                    # 依据当前已并入的笔数量推进索引，避免重复读取同一根笔
-                    next_idx = i + len(bi_ids)
-                    if next_idx < len(self.bis):
-                        next_b = self.bis[next_idx]
-                        if next_b.direction == direction:
-                            if self._overlaps(next_b, high, low):
-                                high = max(high, next_b.high)
-                                low = min(low, next_b.low)
-                                bi_ids.append(next_b.id)
-                                end = next_b.end
-                                end_price = next_b.end_price
-                                extended = True
+                if seg_direction == "up":
+                    if current_bi.direction == "down":
+                        # 标准条件：down笔低点破前down低点
+                        prev_down = self._find_prev_same_dir(j, "down", seg_start_idx)
+                        if prev_down is not None and current_bi.low < self.bis[prev_down].low:
+                            end_idx = j - 1
+                            broken = True
+                            break
+                    else:
+                        # 辅助条件：up笔高点不再创新高
+                        prev_up = self._find_prev_same_dir(j, "up", seg_start_idx)
+                        if prev_up is not None and current_bi.high < self.bis[prev_up].high:
+                            end_idx = j - 1
+                            broken = True
+                            break
+                else:  # down
+                    if current_bi.direction == "up":
+                        prev_up = self._find_prev_same_dir(j, "up", seg_start_idx)
+                        if prev_up is not None and current_bi.high > self.bis[prev_up].high:
+                            end_idx = j - 1
+                            broken = True
+                            break
+                    else:
+                        # 辅助条件：down笔低点不再创新低
+                        prev_down = self._find_prev_same_dir(j, "down", seg_start_idx)
+                        if prev_down is not None and current_bi.low > self.bis[prev_down].low:
+                            end_idx = j - 1
+                            broken = True
+                            break
+                j += 1
+
+            if not broken:
+                end_idx = len(self.bis) - 1
+
+            seg_bis = self.bis[seg_start_idx:end_idx + 1]
+            if len(seg_bis) >= 3:
+                start = seg_bis[0].start
+                end = seg_bis[-1].end
+                high = max(b.high for b in seg_bis)
+                low = min(b.low for b in seg_bis)
+                start_price = seg_bis[0].start_price
+                end_price = seg_bis[-1].end_price
+                direction = "up" if end_price > start_price else "down"
 
                 segments.append(XiangSegment(
-                    id=f"xiang_{len(segments)+1}",
+                    id=f"xiang_{len(segments) + 1}",
                     start=start,
                     end=end,
                     direction=direction,
@@ -75,14 +101,23 @@ class SegmentDetector:
                     low=low,
                     start_price=start_price,
                     end_price=end_price,
-                    bi_ids=bi_ids,
+                    bi_ids=[b.id for b in seg_bis],
                     level=2
                 ))
-                i += len(bi_ids)
+
+            if broken:
+                seg_start_idx = end_idx + 1
             else:
-                i += 1
+                break
 
         return segments
+
+    def _find_prev_same_dir(self, current_idx: int, direction: str, lower_bound: int) -> Optional[int]:
+        """从 current_idx-1 向前找同方向的最近一笔索引"""
+        for k in range(current_idx - 1, lower_bound - 1, -1):
+            if self.bis[k].direction == direction:
+                return k
+        return None
 
     def _has_overlap(self, bis_group: list[Bi]) -> bool:
         """判断一组笔是否有重叠"""
@@ -126,10 +161,8 @@ class SegmentDetector:
 
                 while extend_idx < len(segments):
                     nxt = segments[extend_idx]
-                    # 新段与当前中枢重叠 → 并入
+                    # 新段与当前中枢区间有重叠 → 并入（但不扩大中枢区间）
                     if nxt.high > range_low and nxt.low < range_high:
-                        range_high = max(range_high, nxt.high)
-                        range_low = min(range_low, nxt.low)
                         cur_end = nxt.end
                         xiang_ids.append(nxt.id)
                         extend_idx += 1
